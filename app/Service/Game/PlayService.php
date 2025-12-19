@@ -57,12 +57,14 @@ class PlayService
 
         $board = $this->generateBoard();
         $blocks = $this->generateBlocks();
-        $blocks = "ddcrrmddcrgmdccrgmddcrmodccrgm";
-        $board = "244x3x35545x143";
+        $blocks = "ddcrroddcrgmddcrgmddcrrgddcrrm";
+        $board = "4x23xqxsx5x51x5";
+        // $board = "xxxxxxxxxxxx12x";
 
         $pickaxePhase = $this->mine($blocks, $board);
         $tntPhase = $this->tnt($blocks, $board, $pickaxePhase);
         $totalWin = $this->calculateWin($pickaxePhase, $tntPhase);
+
 
         $round = [
             'balance' => [
@@ -182,7 +184,6 @@ class PlayService
             if (!isset($reel['pickaxes']) || !is_array($reel['pickaxes'])) {
                 continue;
             }
-
             foreach ($reel['pickaxes'] as $pickaxe) {
                 if (isset($pickaxe['payout'])) {
                     $totalWin += (float) $pickaxe['payout'];
@@ -190,14 +191,12 @@ class PlayService
             }
         }
 
-        // Add TNT payouts
         foreach ($tntPhase as $tnt) {
             if (isset($tnt['payout'])) {
                 $totalWin += (float) $tnt['payout'];
             }
         }
 
-        // округление как у провайдера
         return round($totalWin, 2);
     }
 
@@ -207,7 +206,7 @@ class PlayService
         // 2,4,5 – кирки
         // s – special (1 удар)
 
-        $symbols = ['x', 'x', 'x', '2', '4', '5'];
+        $symbols = ['x', 'x', '1', '2', '4', '5'];
 
         $board = '';
         for ($i = 0; $i < 15; $i++) {
@@ -310,7 +309,8 @@ class PlayService
                         }
 
                         if (isset($this->blockPayout[$block])) {
-                            $localPayout = max($localPayout, (float) $this->blockPayout[$block]);
+                            // Суммируем выплаты по всем сломанным блокам киркой
+                            $localPayout += (float) $this->blockPayout[$block];
                         }
                     }
 
@@ -364,62 +364,18 @@ class PlayService
         $blockRows = str_split($blocks, 6);
         $boardRows = str_split($board, 3);
 
-        // Build block HP state after pickaxe phase
+        // 1) Посчитать оставшееся HP после кирок (симуляция той же логики)
         $blockHPRemaining = [];
+        for ($i = 0; $i < 30; $i++) {
+            $blockType = $blocks[$i] ?? null;
+            if ($blockType !== null && isset($this->blockHP[$blockType])) {
+                $blockHPRemaining[$i] = $this->blockHP[$blockType];
+            }
+        }
+
         foreach ($blockRows as $reel => $row) {
             $rowBlocks = str_split($row);
-            foreach ($rowBlocks as $depth => $block) {
-                $globalIndex = $reel * 6 + $depth;
-                $baseHP = $this->blockHP[$block] ?? null;
-                if ($baseHP !== null) {
-                    $blockHPRemaining[$globalIndex] = $baseHP;
-                }
-            }
-        }
-
-        // Apply damage from pickaxe phase
-        foreach ($pickaxePhase as $reelData) {
-            if (!isset($reelData['brokenBlocks'])) {
-                continue;
-            }
-            foreach ($reelData['brokenBlocks'] as $brokenIndex) {
-                if (isset($blockHPRemaining[$brokenIndex])) {
-                    $blockHPRemaining[$brokenIndex] = 0; // Block is broken
-                }
-            }
-
-            // Also apply partial damage from pickaxes that didn't break blocks
-            if (isset($reelData['pickaxes'])) {
-                foreach ($reelData['pickaxes'] as $pickaxe) {
-                    // We need to track partial damage, but for now we'll recalculate
-                    // by simulating the pickaxe hits
-                }
-            }
-        }
-
-        // Recalculate block HP by simulating pickaxe hits
-        // This is more accurate than trying to track partial damage
-        $blockHPRemaining = [];
-        foreach ($blockRows as $reel => $row) {
-            $rowBlocks = str_split($row);
-            foreach ($rowBlocks as $depth => $block) {
-                $globalIndex = $reel * 6 + $depth;
-                $baseHP = $this->blockHP[$block] ?? null;
-                if ($baseHP !== null) {
-                    $blockHPRemaining[$globalIndex] = $baseHP;
-                }
-            }
-        }
-
-        // Simulate pickaxe damage
-        foreach ($pickaxePhase as $reelData) {
-            if (!isset($reelData['reel']) || !isset($reelData['pickaxes'])) {
-                continue;
-            }
-            $reel = $reelData['reel'];
-            $rowBlocks = str_split($blockRows[$reel]);
             $boardRow = str_split($boardRows[$reel]);
-
             $pickaxes = [];
             foreach ($boardRow as $col => $symbol) {
                 if ($symbol !== 'x' && isset($this->pickaxeHits[$symbol])) {
@@ -430,12 +386,13 @@ class PlayService
                     ];
                 }
             }
-
+            if (!$pickaxes) {
+                continue;
+            }
             usort($pickaxes, function ($a, $b) {
-                if ($a['damage'] === $b['damage']) {
-                    return $a['col'] <=> $b['col'];
-                }
-                return $a['damage'] <=> $b['damage'];
+                return $a['damage'] === $b['damage']
+                    ? ($a['col'] <=> $b['col'])
+                    : ($a['damage'] <=> $b['damage']);
             });
 
             $currentIndex = 0;
@@ -446,17 +403,17 @@ class PlayService
                     if (!isset($blockHPRemaining[$globalIndex])) {
                         break;
                     }
-
                     $hp = $blockHPRemaining[$globalIndex];
                     if ($hp <= 0) {
                         $currentIndex++;
                         continue;
                     }
-
+                    // 1 урон за удар
                     $hp--;
                     $damage--;
                     $blockHPRemaining[$globalIndex] = $hp;
 
+                    // переход к следующему блоку только если сломан и урон остался
                     if ($hp <= 0 && $damage > 0) {
                         $currentIndex++;
                     }
@@ -464,73 +421,98 @@ class PlayService
             }
         }
 
+        // 2) TNT: символ '1' на борде, наносит 2 урона по соседям
         $tntPhase = [];
-
-        // Find all TNT on the board
         foreach ($boardRows as $reel => $boardRow) {
             $rowSymbols = str_split($boardRow);
-            foreach ($rowSymbols as $row => $symbol) {
-                if ($symbol === '1') {
-                    // TNT found at (reel, row)
-                    $tntBlockIndex = $reel * 6 + $row;
-                    $brokenBlocks = [];
-                    $payout = 0.0;
+            foreach ($rowSymbols as $boardRowIndex => $symbol) {
+                if ($symbol !== '1') {
+                    continue;
+                }
 
-                    // Find neighboring blocks (vertical and horizontal)
-                    $neighbors = [];
+                // TNT падает до первой неразрушенной клетки в столбце
+                $landingDepth = null;
+                for ($depth = 0; $depth < 6; $depth++) {
+                    $gIndex = $reel * 6 + $depth;
+                    if (isset($blockHPRemaining[$gIndex]) && $blockHPRemaining[$gIndex] > 0) {
+                        $landingDepth = $depth;
+                        break;
+                    }
+                }
+                if ($landingDepth === null) {
+                    continue; // столбец пуст — нечего взрывать
+                }
 
-                    // Same reel: blocks at depth row-1, row+1 (if exists)
-                    if ($row > 0) {
-                        $neighbors[] = $reel * 6 + ($row - 1);
-                    }
-                    if ($row < 5) {
-                        $neighbors[] = $reel * 6 + ($row + 1);
+                $tntBlockIndex = $reel * 6 + $landingDepth;
+                $neighbors = [];
+
+                // тот же столбец (вверх/вниз от landingDepth)
+                if ($landingDepth > 0)
+                    $neighbors[] = $reel * 6 + ($landingDepth - 1);
+                if ($landingDepth < 5)
+                    $neighbors[] = $reel * 6 + ($landingDepth + 1);
+
+                // соседние столбцы (диагонали + вертикаль) от landingDepth
+                if ($reel > 0) {
+                    if ($landingDepth > 0)
+                        $neighbors[] = ($reel - 1) * 6 + ($landingDepth - 1);
+                    $neighbors[] = ($reel - 1) * 6 + $landingDepth;
+                    if ($landingDepth < 5)
+                        $neighbors[] = ($reel - 1) * 6 + ($landingDepth + 1);
+                }
+                if ($reel < 4) {
+                    if ($landingDepth > 0)
+                        $neighbors[] = ($reel + 1) * 6 + ($landingDepth - 1);
+                    $neighbors[] = ($reel + 1) * 6 + $landingDepth;
+                    if ($landingDepth < 5)
+                        $neighbors[] = ($reel + 1) * 6 + ($landingDepth + 1);
+                }
+
+                $brokenBlocks = [];
+                $payout = 0.0;
+                $didDamage = false;
+
+                // TNT также бьёт по своей клетке
+                $targets = array_merge([$tntBlockIndex], $neighbors);
+
+                foreach ($targets as $targetIndex) {
+                    if (!isset($blockHPRemaining[$targetIndex])) {
+                        continue;
                     }
 
-                    // Adjacent reels: block at depth row
-                    if ($reel > 0) {
-                        $neighbors[] = ($reel - 1) * 6 + $row;
-                    }
-                    if ($reel < 4) {
-                        $neighbors[] = ($reel + 1) * 6 + $row;
+                    $hp = $blockHPRemaining[$targetIndex];
+                    if ($hp <= 0) {
+                        continue;
                     }
 
-                    // Apply 2 damage to each neighbor
-                    foreach ($neighbors as $neighborIndex) {
-                        if (!isset($blockHPRemaining[$neighborIndex])) {
-                            continue;
+                    $hp -= 2; // TNT урон
+                    $blockHPRemaining[$targetIndex] = $hp;
+                    $didDamage = true; // зафиксировали взрыв
+
+                    if ($hp <= 0) {
+                        $brokenBlocks[] = $targetIndex;
+
+                        // тип блока для выплаты
+                        $blockReel = intdiv($targetIndex, 6);
+                        $blockDepth = $targetIndex % 6;
+                        $blockType = $blockRows[$blockReel][$blockDepth] ?? null;
+                        if ($blockType && isset($this->blockPayout[$blockType])) {
+                            // Суммируем выплаты сломанных блоков (не максимум)
+                            $payout += (float) $this->blockPayout[$blockType];
                         }
-
-                        $hp = $blockHPRemaining[$neighborIndex];
-                        if ($hp <= 0) {
-                            continue; // Already broken
-                        }
-
-                        // Apply 2 damage
-                        $hp -= 2;
-                        $blockHPRemaining[$neighborIndex] = $hp;
-
-                        // If block is broken, add to broken list
-                        if ($hp <= 0) {
-                            $brokenBlocks[] = $neighborIndex;
-
-                            // Calculate payout
-                            $blockType = $blocks[$neighborIndex] ?? null;
-                            if ($blockType && isset($this->blockPayout[$blockType])) {
-                                $payout = max($payout, (float) $this->blockPayout[$blockType]);
-                            }
-                        }
                     }
+                }
 
-                    if (!empty($brokenBlocks)) {
-                        $tntPhase[] = [
-                            'blockIndex' => $tntBlockIndex,
-                            'brokenBlocks' => $brokenBlocks,
-                            'payout' => round($payout, 1),
-                            'reel' => $reel,
-                            'row' => $row,
-                        ];
-                    }
+
+                if ($didDamage) {
+                    sort($brokenBlocks);
+                    $tntPhase[] = [
+                        'blockIndex' => $tntBlockIndex,
+                        'brokenBlocks' => $brokenBlocks,
+                        'payout' => round($payout, 1),
+                        'reel' => $reel,
+                        'row' => $boardRowIndex, // исходная позиция на борде
+                    ];
                 }
             }
         }
