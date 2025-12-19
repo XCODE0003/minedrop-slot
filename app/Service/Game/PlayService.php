@@ -37,7 +37,7 @@ class PlayService
         '5' => 1,
         '4' => 2,
         '3' => 3,
-        '2' => 7,
+        '2' => 5,
     ];
     public function __construct(SessionGame $session, $bet)
     {
@@ -55,10 +55,11 @@ class PlayService
     {
         $seed = $this->generateSeed(); // ОДИН seed на весь раунд
 
-        $board  = $this->generateBoard();
-        // $board = "222xxxxxxxxxxxx";
+        $board = $this->generateBoard();
         $blocks = $this->generateBlocks();
-        // $blocks = "ddcrmoddccrmddrcrmdcccmmdccrgm";
+        $blocks = "dddrmodddrmodddrmodcrrgoddccro";
+        $board = "222xxxxxxxxxxxx";
+
 
         $pickaxePhase = $this->mine($blocks, $board);
         $totalWin = $this->calculateWin($pickaxePhase);
@@ -257,21 +258,21 @@ class PlayService
 
                 $localBroken = [];
                 $localPayout = 0.0;
+                $is_broken = false;
                 while ($currentIndex < 6 && $damage > 0) {
                     $block = $rowBlocks[$currentIndex];
                     $hp = $this->blockHP[$block] ?? null;
-                    if ($hp === null)
+                    if ($hp === null) {
                         break;
-
-                    if ($damage < $hp)
-                        break;
-
-
-                    $damage -= $hp;
-
+                    }
+                    if ($damage >= $hp) {
+                        $is_broken = true;
+                    }
+                    $hp -= $damage;
                     $globalIndex = $reel * 6 + $currentIndex;
                     $localBroken[] = $globalIndex;
                     $allBroken[] = $globalIndex;
+
 
                     if (isset($this->blockPayout[$block])) {
                         $localPayout = max($localPayout, (float) $this->blockPayout[$block]);
@@ -286,6 +287,10 @@ class PlayService
                         'payout' => (float) $localPayout,
                         'row' => $pickaxe['col'],
                         'symbol' => $pickaxe['symbol'],
+                        'hp' => $hp,
+                        'damage' => $damage,
+                        'block' => $block,
+                        'is_broken' => $is_broken,
                     ];
                 }
             }
@@ -297,6 +302,7 @@ class PlayService
                 $pickaxePhase[] = [
                     'brokenBlocks' => $allBroken,
                     'pickaxes' => $pickaxesOut,
+                    'block' => $block,
                     'reel' => $reel,
                 ];
             }
