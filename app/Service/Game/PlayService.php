@@ -14,12 +14,12 @@ class PlayService
     private $bet;
 
     private $blockHP = [
-        'd' => 1,
-        'c' => 2,
-        'r' => 4,
-        'g' => 5,
-        'm' => 6,
-        'o' => 7,
+        'd' => 1, // земля
+        'c' => 2, // камень
+        'r' => 4, // руда
+        'g' => 5, // золото
+        'm' => 6, // алмаз
+        'o' => 7, // обсидиан
     ];
 
     // payout по блокам — минимум, который уже подтверждается твоими "правильными" JSON
@@ -34,10 +34,10 @@ class PlayService
     ];
 
     private $pickaxeHits = [
-        '5' => 1,
-        '4' => 2,
-        '3' => 3,
-        '2' => 5,
+        '5' => 1, // деревянная
+        '4' => 2, // железная
+        '3' => 3, // золотая
+        '2' => 5, // алмазная
     ];
     public function __construct(SessionGame $session, $bet)
     {
@@ -57,12 +57,12 @@ class PlayService
 
         $board = $this->generateBoard();
         $blocks = $this->generateBlocks();
-        $blocks = "dddrmodddrmodddrmodcrrgoddccro";
-        $board = "222xxxxxxxxxxxx";
-
+        $blocks = "ddcrrmddcrgmdccrgmddcrmodccrgm";
+        $board = "244x3x35545x143";
 
         $pickaxePhase = $this->mine($blocks, $board);
-        $totalWin = $this->calculateWin($pickaxePhase);
+        $tntPhase = $this->tnt($blocks, $board, $pickaxePhase);
+        $totalWin = $this->calculateWin($pickaxePhase, $tntPhase);
 
         $round = [
             'balance' => [
@@ -91,7 +91,7 @@ class PlayService
                     [
                         'index' => 2,
                         'pickaxePhase' => $pickaxePhase,
-                        'tntPhase' => [],
+                        'tntPhase' => $tntPhase,
                         'type' => 'mine',
                     ],
                 ],
@@ -174,7 +174,7 @@ class PlayService
             ]
         ];
     }
-    private function calculateWin(array $pickaxePhase): float
+    private function calculateWin(array $pickaxePhase, array $tntPhase = []): float
     {
         $totalWin = 0.0;
 
@@ -185,9 +185,15 @@ class PlayService
 
             foreach ($reel['pickaxes'] as $pickaxe) {
                 if (isset($pickaxe['payout'])) {
-
                     $totalWin += (float) $pickaxe['payout'];
                 }
+            }
+        }
+
+        // Add TNT payouts
+        foreach ($tntPhase as $tnt) {
+            if (isset($tnt['payout'])) {
+                $totalWin += (float) $tnt['payout'];
             }
         }
 
@@ -212,8 +218,6 @@ class PlayService
     }
     private function mine(string $blocks, string $board): array
     {
-
-
         if (strlen($blocks) !== 30 || strlen($board) !== 15) {
             return [];
         }
@@ -253,43 +257,83 @@ class PlayService
             $allBroken = [];
             $pickaxesOut = [];
 
+            // Track remaining HP for each block (cumulative damage)
+            $blockHPRemaining = [];
+
             foreach ($pickaxes as $pickaxe) {
                 $damage = $pickaxe['damage'];
 
                 $localBroken = [];
                 $localPayout = 0.0;
                 $is_broken = false;
+                $lastBlock = null;
+                $lastHP = null;
+                $lastBlockIndex = null; // Track the last block index that was hit
+
                 while ($currentIndex < 6 && $damage > 0) {
                     $block = $rowBlocks[$currentIndex];
-                    $hp = $this->blockHP[$block] ?? null;
-                    if ($hp === null) {
+                    $baseHP = $this->blockHP[$block] ?? null;
+                    if ($baseHP === null) {
                         break;
                     }
-                    if ($damage >= $hp) {
-                        $is_broken = true;
+
+                    // Get remaining HP for this block (accounting for previous damage)
+                    if (!isset($blockHPRemaining[$currentIndex])) {
+                        $blockHPRemaining[$currentIndex] = $baseHP;
                     }
-                    $hp -= $damage;
+                    $hp = $blockHPRemaining[$currentIndex];
+
+                    // Skip if block is already broken (HP <= 0)
+                    if ($hp <= 0) {
+                        $currentIndex++;
+                        continue;
+                    }
+
                     $globalIndex = $reel * 6 + $currentIndex;
-                    $localBroken[] = $globalIndex;
-                    $allBroken[] = $globalIndex;
 
+                    // Deal 1 damage per hit
+                    $hp--;
+                    $damage--;
+                    $blockHPRemaining[$currentIndex] = $hp;
 
-                    if (isset($this->blockPayout[$block])) {
-                        $localPayout = max($localPayout, (float) $this->blockPayout[$block]);
+                    // Track the last block that was hit
+                    $lastBlockIndex = $globalIndex;
+
+                    // If block is broken (HP reached 0), add to broken list
+                    if ($hp <= 0) {
+                        if (!in_array($globalIndex, $localBroken)) {
+                            $localBroken[] = $globalIndex;
+                            $is_broken = true;
+                        }
+                        if (!in_array($globalIndex, $allBroken)) {
+                            $allBroken[] = $globalIndex;
+                        }
+
+                        if (isset($this->blockPayout[$block])) {
+                            $localPayout = max($localPayout, (float) $this->blockPayout[$block]);
+                        }
                     }
 
-                    $currentIndex++;
+                    $lastBlock = $block;
+                    $lastHP = $hp;
+
+                    // Move to next block only if current block is fully broken AND we still have damage
+                    // If block is not broken (hp > 0), we'll continue hitting it in next iteration
+                    if ($hp <= 0 && $damage > 0) {
+                        $currentIndex++; // Move to next block only if we have more damage
+                    }
+                    // If hp > 0, we stay on the same block and will hit it again in next iteration
                 }
 
-                if ($localBroken) {
+                if ($localBroken || $lastBlockIndex !== null) {
                     $pickaxesOut[] = [
-                        'breakBlock' => max(end($localBroken), $reel * 6 + $pickaxe['col']),
+                        'breakBlock' => $lastBlockIndex !== null ? $lastBlockIndex : max(end($localBroken), $reel * 6 + $pickaxe['col']),
                         'payout' => (float) $localPayout,
                         'row' => $pickaxe['col'],
                         'symbol' => $pickaxe['symbol'],
-                        'hp' => $hp,
-                        'damage' => $damage,
-                        'block' => $block,
+                        'hp' => $lastHP,
+                        'damage' => $pickaxe['damage'],
+                        'block' => $lastBlock,
                         'is_broken' => $is_broken,
                     ];
                 }
@@ -309,6 +353,189 @@ class PlayService
         }
 
         return $pickaxePhase;
+    }
+
+    private function tnt(string $blocks, string $board, array $pickaxePhase): array
+    {
+        if (strlen($blocks) !== 30 || strlen($board) !== 15) {
+            return [];
+        }
+
+        $blockRows = str_split($blocks, 6);
+        $boardRows = str_split($board, 3);
+
+        // Build block HP state after pickaxe phase
+        $blockHPRemaining = [];
+        foreach ($blockRows as $reel => $row) {
+            $rowBlocks = str_split($row);
+            foreach ($rowBlocks as $depth => $block) {
+                $globalIndex = $reel * 6 + $depth;
+                $baseHP = $this->blockHP[$block] ?? null;
+                if ($baseHP !== null) {
+                    $blockHPRemaining[$globalIndex] = $baseHP;
+                }
+            }
+        }
+
+        // Apply damage from pickaxe phase
+        foreach ($pickaxePhase as $reelData) {
+            if (!isset($reelData['brokenBlocks'])) {
+                continue;
+            }
+            foreach ($reelData['brokenBlocks'] as $brokenIndex) {
+                if (isset($blockHPRemaining[$brokenIndex])) {
+                    $blockHPRemaining[$brokenIndex] = 0; // Block is broken
+                }
+            }
+
+            // Also apply partial damage from pickaxes that didn't break blocks
+            if (isset($reelData['pickaxes'])) {
+                foreach ($reelData['pickaxes'] as $pickaxe) {
+                    // We need to track partial damage, but for now we'll recalculate
+                    // by simulating the pickaxe hits
+                }
+            }
+        }
+
+        // Recalculate block HP by simulating pickaxe hits
+        // This is more accurate than trying to track partial damage
+        $blockHPRemaining = [];
+        foreach ($blockRows as $reel => $row) {
+            $rowBlocks = str_split($row);
+            foreach ($rowBlocks as $depth => $block) {
+                $globalIndex = $reel * 6 + $depth;
+                $baseHP = $this->blockHP[$block] ?? null;
+                if ($baseHP !== null) {
+                    $blockHPRemaining[$globalIndex] = $baseHP;
+                }
+            }
+        }
+
+        // Simulate pickaxe damage
+        foreach ($pickaxePhase as $reelData) {
+            if (!isset($reelData['reel']) || !isset($reelData['pickaxes'])) {
+                continue;
+            }
+            $reel = $reelData['reel'];
+            $rowBlocks = str_split($blockRows[$reel]);
+            $boardRow = str_split($boardRows[$reel]);
+
+            $pickaxes = [];
+            foreach ($boardRow as $col => $symbol) {
+                if ($symbol !== 'x' && isset($this->pickaxeHits[$symbol])) {
+                    $pickaxes[] = [
+                        'symbol' => $symbol,
+                        'damage' => $this->pickaxeHits[$symbol],
+                        'col' => $col,
+                    ];
+                }
+            }
+
+            usort($pickaxes, function ($a, $b) {
+                if ($a['damage'] === $b['damage']) {
+                    return $a['col'] <=> $b['col'];
+                }
+                return $a['damage'] <=> $b['damage'];
+            });
+
+            $currentIndex = 0;
+            foreach ($pickaxes as $pickaxe) {
+                $damage = $pickaxe['damage'];
+                while ($currentIndex < 6 && $damage > 0) {
+                    $globalIndex = $reel * 6 + $currentIndex;
+                    if (!isset($blockHPRemaining[$globalIndex])) {
+                        break;
+                    }
+
+                    $hp = $blockHPRemaining[$globalIndex];
+                    if ($hp <= 0) {
+                        $currentIndex++;
+                        continue;
+                    }
+
+                    $hp--;
+                    $damage--;
+                    $blockHPRemaining[$globalIndex] = $hp;
+
+                    if ($hp <= 0 && $damage > 0) {
+                        $currentIndex++;
+                    }
+                }
+            }
+        }
+
+        $tntPhase = [];
+
+        // Find all TNT on the board
+        foreach ($boardRows as $reel => $boardRow) {
+            $rowSymbols = str_split($boardRow);
+            foreach ($rowSymbols as $row => $symbol) {
+                if ($symbol === '1') {
+                    // TNT found at (reel, row)
+                    $tntBlockIndex = $reel * 6 + $row;
+                    $brokenBlocks = [];
+                    $payout = 0.0;
+
+                    // Find neighboring blocks (vertical and horizontal)
+                    $neighbors = [];
+
+                    // Same reel: blocks at depth row-1, row+1 (if exists)
+                    if ($row > 0) {
+                        $neighbors[] = $reel * 6 + ($row - 1);
+                    }
+                    if ($row < 5) {
+                        $neighbors[] = $reel * 6 + ($row + 1);
+                    }
+
+                    // Adjacent reels: block at depth row
+                    if ($reel > 0) {
+                        $neighbors[] = ($reel - 1) * 6 + $row;
+                    }
+                    if ($reel < 4) {
+                        $neighbors[] = ($reel + 1) * 6 + $row;
+                    }
+
+                    // Apply 2 damage to each neighbor
+                    foreach ($neighbors as $neighborIndex) {
+                        if (!isset($blockHPRemaining[$neighborIndex])) {
+                            continue;
+                        }
+
+                        $hp = $blockHPRemaining[$neighborIndex];
+                        if ($hp <= 0) {
+                            continue; // Already broken
+                        }
+
+                        // Apply 2 damage
+                        $hp -= 2;
+                        $blockHPRemaining[$neighborIndex] = $hp;
+
+                        // If block is broken, add to broken list
+                        if ($hp <= 0) {
+                            $brokenBlocks[] = $neighborIndex;
+
+                            // Calculate payout
+                            $blockType = $blocks[$neighborIndex] ?? null;
+                            if ($blockType && isset($this->blockPayout[$blockType])) {
+                                $payout = max($payout, (float) $this->blockPayout[$blockType]);
+                            }
+                        }
+                    }
+
+                    if (!empty($brokenBlocks)) {
+                        $tntPhase[] = [
+                            'blockIndex' => $tntBlockIndex,
+                            'brokenBlocks' => $brokenBlocks,
+                            'payout' => round($payout, 1),
+                            'reel' => $reel,
+                            'row' => $row,
+                        ];
+                    }
+                }
+            }
+        }
+
+        return $tntPhase;
     }
 
 
