@@ -39,10 +39,25 @@ class PlayService
         '3' => 3, // золотая
         '2' => 5, // алмазная
     ];
+
+    /**
+     * Множитель для детерминированной генерации board и blocks
+     */
+    private $multiplierSeed = null;
+
     public function __construct(SessionGame $session, $bet)
     {
         $this->session = $session;
         $this->bet = $bet;
+    }
+
+    /**
+     * Задать множитель, который будет использоваться как seed для генерации.
+     * Передайте нужный multiplier перед вызовом play().
+     */
+    public function setMultiplierSeed($multiplier): void
+    {
+        $this->multiplierSeed = $multiplier;
     }
     public function play(): array
     {
@@ -55,15 +70,42 @@ class PlayService
     {
         $seed = $this->generateSeed(); // ОДИН seed на весь раунд
 
-        $board = $this->generateBoard();
-        $blocks = $this->generateBlocks();
-        $blocks = "ddcrroddcrgmddcrgmddcrrgddcrrm";
-        $board = "4x23xqxsx5x51x5";
-        // $board = "xxxxxxxxxxxx12x";
+        $board = null;
+        $blocks = null;
+        $pickaxePhase = null;
+        $tntPhase = null;
+        $totalWin = 0.0;
 
-        $pickaxePhase = $this->mine($blocks, $board);
-        $tntPhase = $this->tnt($blocks, $board, $pickaxePhase);
-        $totalWin = $this->calculateWin($pickaxePhase, $tntPhase);
+        // Если задан множитель, перебираем варианты до получения нужного выигрыша
+        if ($this->multiplierSeed !== null) {
+            $targetMultiplier = (float) $this->multiplierSeed;
+            $maxAttempts = 1000000; // Ограничение попыток
+            $attempt = 0;
+
+            while ($attempt < $maxAttempts) {
+                // Генерируем случайно с умной подстройкой под целевой множитель
+                $board = $this->generateBoard($targetMultiplier);
+                $blocks = $this->generateBlocks($targetMultiplier);
+
+                $pickaxePhase = $this->mine($blocks, $board);
+                $tntPhase = $this->tnt($blocks, $board, $pickaxePhase);
+                $totalWin = $this->calculateWin($pickaxePhase, $tntPhase);
+
+                // Проверяем, совпадает ли выигрыш с целевым множителем (с небольшой погрешностью)
+                if (abs($totalWin - $targetMultiplier) < 0.01) {
+                    break; // Нашли нужный результат
+                }
+
+                $attempt++;
+            }
+        } else {
+            $board = $this->generateBoard();
+            $blocks = $this->generateBlocks();
+
+            $pickaxePhase = $this->mine($blocks, $board);
+            $tntPhase = $this->tnt($blocks, $board, $pickaxePhase);
+            $totalWin = $this->calculateWin($pickaxePhase, $tntPhase);
+        }
 
 
         $round = [
@@ -200,17 +242,37 @@ class PlayService
         return round($totalWin, 2);
     }
 
-    private function generateBoard(): string
+    private function generateBoard(?float $targetMultiplier = null): string
     {
         // x – пусто
-        // 2,4,5 – кирки
-        // s – special (1 удар)
-
-        $symbols = ['x', 'x', '1', '2', '4', '5'];
+        // 1 – TNT
+        // 2,3,4,5 – кирки (2=5 урона, 3=3 урона, 4=2 урона, 5=1 урон)
 
         $board = '';
-        for ($i = 0; $i < 15; $i++) {
-            $board .= $symbols[array_rand($symbols)];
+
+        if ($targetMultiplier !== null && $targetMultiplier > 10) {
+            // Для больших множителей увеличиваем вероятность мощных кирок и TNT
+            $boostFactor = min(($targetMultiplier / 100), 0.7); // Максимум 70% буст
+
+            for ($i = 0; $i < 15; $i++) {
+                // Подстраиваем веса: больше мощных кирок и TNT для больших множителей
+                $weights = [
+                    'x' => (int)(30 * (1 - $boostFactor)),
+                    '1' => (int)(15 * (1 + $boostFactor * 2)), // TNT
+                    '2' => (int)(15 * (1 + $boostFactor * 1.5)), // Мощная кирка (5 урона)
+                    '3' => (int)(15 * (1 + $boostFactor * 0.5)), // Кирка (3 урона)
+                    '4' => (int)(15 * (1 - $boostFactor * 0.3)), // Кирка (2 урона)
+                    '5' => (int)(10 * (1 - $boostFactor * 0.5)), // Кирка (1 урон)
+                ];
+
+                $board .= $this->weightedRandom($weights);
+            }
+        } else {
+            // Обычная генерация
+            $symbols = ['x', 'x', '1', '2', '4', '5'];
+            for ($i = 0; $i < 15; $i++) {
+                $board .= $symbols[array_rand($symbols)];
+            }
         }
 
         return $board;
@@ -531,9 +593,15 @@ class PlayService
         // Generate a random seed in a reasonable range (e.g., 1 to 999999)
         return (string) mt_rand(1, 999999);
     }
-    private function generateBlocks(): string
+    private function generateBlocks(?float $targetMultiplier = null): string
     {
         $blocks = '';
+
+        // Определяем буст для ценных блоков на основе целевого множителя
+        $boostFactor = 0;
+        if ($targetMultiplier !== null && $targetMultiplier > 10) {
+            $boostFactor = min(($targetMultiplier / 200), 0.8); // Максимум 80% буст
+        }
 
         for ($reel = 0; $reel < 5; $reel++) {
             for ($depth = 0; $depth < 6; $depth++) {
@@ -545,40 +613,77 @@ class PlayService
                         break;
 
                     case 1: // 2 ряд — земля, редко камень
-                        $block = $this->weightedRandom([
-                            'd' => 80,
-                            'c' => 20,
-                        ]);
+                        if ($boostFactor > 0) {
+                            $block = $this->weightedRandom([
+                                'd' => (int)(80 * (1 - $boostFactor * 0.3)),
+                                'c' => (int)(20 * (1 + $boostFactor)),
+                            ]);
+                        } else {
+                            $block = $this->weightedRandom([
+                                'd' => 80,
+                                'c' => 20,
+                            ]);
+                        }
                         break;
 
                     case 2: // 3 ряд — иногда земля, чаще камень или руда
-                        $block = $this->weightedRandom([
-                            'd' => 20,
-                            'c' => 50,
-                            'r' => 30,
-                        ]);
+                        if ($boostFactor > 0) {
+                            $block = $this->weightedRandom([
+                                'd' => (int)(20 * (1 - $boostFactor)),
+                                'c' => (int)(50 * (1 - $boostFactor * 0.2)),
+                                'r' => (int)(30 * (1 + $boostFactor * 1.5)),
+                            ]);
+                        } else {
+                            $block = $this->weightedRandom([
+                                'd' => 20,
+                                'c' => 50,
+                                'r' => 30,
+                            ]);
+                        }
                         break;
 
                     case 3: // 4 ряд — камень или руда
-                        $block = $this->weightedRandom([
-                            'c' => 60,
-                            'r' => 40,
-                        ]);
+                        if ($boostFactor > 0) {
+                            $block = $this->weightedRandom([
+                                'c' => (int)(60 * (1 - $boostFactor * 0.3)),
+                                'r' => (int)(40 * (1 + $boostFactor * 1.2)),
+                            ]);
+                        } else {
+                            $block = $this->weightedRandom([
+                                'c' => 60,
+                                'r' => 40,
+                            ]);
+                        }
                         break;
 
                     case 4: // 5 ряд — руда / золото / алмаз
-                        $block = $this->weightedRandom([
-                            'r' => 40,
-                            'g' => 40,
-                            'm' => 20,
-                        ]);
+                        if ($boostFactor > 0) {
+                            $block = $this->weightedRandom([
+                                'r' => (int)(40 * (1 - $boostFactor * 0.5)),
+                                'g' => (int)(40 * (1 + $boostFactor * 0.8)),
+                                'm' => (int)(20 * (1 + $boostFactor * 2)),
+                            ]);
+                        } else {
+                            $block = $this->weightedRandom([
+                                'r' => 40,
+                                'g' => 40,
+                                'm' => 20,
+                            ]);
+                        }
                         break;
 
                     case 5: // 6 ряд — алмаз / обсидиан
-                        $block = $this->weightedRandom([
-                            'm' => 60,
-                            'o' => 40,
-                        ]);
+                        if ($boostFactor > 0) {
+                            $block = $this->weightedRandom([
+                                'm' => (int)(60 * (1 - $boostFactor * 0.3)),
+                                'o' => (int)(40 * (1 + $boostFactor * 1.5)),
+                            ]);
+                        } else {
+                            $block = $this->weightedRandom([
+                                'm' => 60,
+                                'o' => 40,
+                            ]);
+                        }
                         break;
                 }
 

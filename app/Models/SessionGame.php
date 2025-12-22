@@ -29,4 +29,9 @@ class SessionGame extends Model
     {
         return $this->hasMany(Bet::class);
     }
+
+    public function balanceToUsd() {
+        return $this->balance / 1000000;
+    }
+
 }

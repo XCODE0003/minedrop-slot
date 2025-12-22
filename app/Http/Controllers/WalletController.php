@@ -23,12 +23,21 @@ class WalletController extends Controller
         $currency = $request->currency;
 
         $playService = new PlayService($sessionGame, $amount);
+        $multiplier = 1;
+        $playService->setMultiplierSeed($multiplier);
+        $win = $multiplier * $amount;
+        $sessionGame->balance -= $amount;
+        $sessionGame->balance += $win;
+
+
+
         return $playService->play();
     }
-    public function authenticate(){
+    public function authenticate(Request $request){
+        $sessionGame = SessionGame::where('session_uuid', $request->sessionID)->first();
         $data = [
             'balance' => [
-                'amount' => 1000000000,
+                'amount' => $sessionGame->balance,
                 'currency' => 'USD'
             ],
             'round' => null,
@@ -110,7 +119,7 @@ class WalletController extends Controller
         }
         return response()->json([
             'balance' => [
-                'amount' => $sessionGame->balance * 100,
+                'amount' => $sessionGame->balance,
                 'currency' => 'USD'
             ]
         ]);
