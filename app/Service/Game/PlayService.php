@@ -38,6 +38,7 @@ class PlayService
         '4' => 2, // железная
         '3' => 3, // золотая
         '2' => 5, // алмазная
+        's' => 1, // special (1 удар)
     ];
 
     /**
@@ -64,6 +65,250 @@ class PlayService
         $round = $this->getRound();
 
         return $round;
+    }
+
+    public function playBonus(): array
+    {
+        $seed = $this->generateSeed();
+        $state = [];
+        $stateIndex = 0;
+
+        $targetMultiplier = null;
+        if ($this->multiplierSeed !== null) {
+            $targetMultiplier = (float) $this->multiplierSeed;
+        }
+
+        // 1. Начальное состояние с seed
+        $state[] = [
+            'index' => $stateIndex++,
+            's' => $seed,
+            'type' => 's',
+        ];
+
+        // 2. Генерируем начальную доску с бонусными символами (один раз)
+        $initialBoard = $this->generateBonusBoard();
+
+        // Находим позиции бонусных символов (вероятно 's')
+        $bonusPositions = [];
+        $boardRows = str_split($initialBoard, 3);
+        foreach ($boardRows as $reel => $row) {
+            $rowSymbols = str_split($row);
+            foreach ($rowSymbols as $rowIndex => $symbol) {
+                if ($symbol === 's') {
+                    $bonusPositions[] = [$reel, $rowIndex];
+                }
+            }
+        }
+
+        $anticipation = count($bonusPositions);
+        $freeSpinCount = 5; // Фиксированное количество free spins
+
+        // Если задан множитель, перебираем варианты до получения нужного выигрыша
+        $maxAttempts = $targetMultiplier !== null ? 1000000 : 1;
+        $attempt = 0;
+        $totalWin = 0.0;
+        $allSpinsData = [];
+        $finalBlocks = null;
+
+        while ($attempt < $maxAttempts) {
+            $totalWin = 0.0;
+            $allSpinsData = [];
+
+            // Генерируем блоки для первого спина
+            $blocks = $this->generateBlocks($targetMultiplier);
+
+            // 5. Первый спин (начальная доска)
+            $pickaxePhase = $this->mine($blocks, $initialBoard);
+            $tntPhase = $this->tnt($blocks, $initialBoard, $pickaxePhase);
+            $spinWin = $this->calculateWin($pickaxePhase, $tntPhase);
+            $totalWin += $spinWin;
+            $allSpinsData[] = [
+                'board' => $initialBoard,
+                'blocks' => $blocks,
+                'pickaxePhase' => $pickaxePhase,
+                'tntPhase' => $tntPhase,
+                'spinWin' => $spinWin,
+            ];
+
+            // 6. Free spins (еще 4 спина после первого)
+            for ($spin = 1; $spin < $freeSpinCount; $spin++) {
+                // Генерируем новую доску для free spin
+                $freeBoard = $this->generateBoard($targetMultiplier);
+                $freeBlocks = $this->generateBlocks($targetMultiplier);
+
+                // Mine phase
+                $pickaxePhase = $this->mine($freeBlocks, $freeBoard);
+                $tntPhase = $this->tnt($freeBlocks, $freeBoard, $pickaxePhase);
+                $spinWin = $this->calculateWin($pickaxePhase, $tntPhase);
+                $totalWin += $spinWin;
+                $allSpinsData[] = [
+                    'board' => $freeBoard,
+                    'blocks' => $freeBlocks,
+                    'pickaxePhase' => $pickaxePhase,
+                    'tntPhase' => $tntPhase,
+                    'spinWin' => $spinWin,
+                ];
+            }
+
+            // 7. Финальный спин (freeSpinsRemaining: 0)
+            $finalBoard = $this->generateBoard($targetMultiplier);
+            $finalBlocks = $this->generateBlocks($targetMultiplier);
+
+            $pickaxePhase = $this->mine($finalBlocks, $finalBoard);
+            $tntPhase = $this->tnt($finalBlocks, $finalBoard, $pickaxePhase);
+            $spinWin = $this->calculateWin($pickaxePhase, $tntPhase);
+            $totalWin += $spinWin;
+            $allSpinsData[] = [
+                'board' => $finalBoard,
+                'blocks' => $finalBlocks,
+                'pickaxePhase' => $pickaxePhase,
+                'tntPhase' => $tntPhase,
+                'spinWin' => $spinWin,
+            ];
+
+            // Проверяем, совпадает ли выигрыш с целевым множителем
+            if ($targetMultiplier === null || abs($totalWin - $targetMultiplier) < 0.01) {
+                break; // Нашли нужный результат
+            }
+
+            $attempt++;
+        }
+
+        // Используем блоки из первого спина для reveal
+        $finalBlocks = $allSpinsData[0]['blocks'];
+
+        // 3. Reveal с anticipation
+        $state[] = [
+            'index' => $stateIndex++,
+            'anticipation' => $anticipation,
+            'blocks' => $finalBlocks,
+            'board' => $initialBoard,
+            'type' => 'reveal',
+        ];
+
+        // 4. Bonus enter
+        $state[] = [
+            'index' => $stateIndex++,
+            'bonusType' => 'Bonus',
+            'freeSpinCount' => $freeSpinCount,
+            'positions' => $bonusPositions,
+            'type' => 'bonusEnter',
+        ];
+
+        // Формируем state из сохраненных данных
+        $currentTotalWin = 0.0;
+
+        // Первый спин
+        $spinData = $allSpinsData[0];
+        $currentTotalWin += $spinData['spinWin'];
+        $state[] = [
+            'index' => $stateIndex++,
+            'pickaxePhase' => $spinData['pickaxePhase'],
+            'tntPhase' => $spinData['tntPhase'],
+            'type' => 'mine',
+        ];
+
+        if ($spinData['spinWin'] > 0) {
+            $state[] = [
+                'index' => $stateIndex++,
+                'totalWin' => round($currentTotalWin, 2),
+                'type' => 'totalWin',
+            ];
+        }
+
+        // Free spins (4 спина)
+        for ($spin = 1; $spin < $freeSpinCount; $spin++) {
+            $freeSpinsRemaining = $freeSpinCount - $spin;
+            $spinData = $allSpinsData[$spin];
+
+            // Bonus reveal
+            $state[] = [
+                'index' => $stateIndex++,
+                'anticipation' => 0,
+                'board' => $spinData['board'],
+                'freeSpinsRemaining' => $freeSpinsRemaining,
+                'type' => 'bonusReveal',
+            ];
+
+            // Mine phase
+            $state[] = [
+                'index' => $stateIndex++,
+                'pickaxePhase' => $spinData['pickaxePhase'],
+                'tntPhase' => $spinData['tntPhase'],
+                'type' => 'mine',
+            ];
+
+            $currentTotalWin += $spinData['spinWin'];
+            $state[] = [
+                'index' => $stateIndex++,
+                'totalWin' => round($currentTotalWin, 2),
+                'type' => 'totalWin',
+            ];
+        }
+
+        // Финальный спин
+        $spinData = $allSpinsData[$freeSpinCount];
+        $state[] = [
+            'index' => $stateIndex++,
+            'anticipation' => 0,
+            'board' => $spinData['board'],
+            'freeSpinsRemaining' => 0,
+            'type' => 'bonusReveal',
+        ];
+
+        $state[] = [
+            'index' => $stateIndex++,
+            'pickaxePhase' => $spinData['pickaxePhase'],
+            'tntPhase' => $spinData['tntPhase'],
+            'type' => 'mine',
+        ];
+
+        $currentTotalWin += $spinData['spinWin'];
+        if ($spinData['spinWin'] > 0) {
+            $state[] = [
+                'index' => $stateIndex++,
+                'totalWin' => round($currentTotalWin, 2),
+                'type' => 'totalWin',
+            ];
+        }
+
+        // 8. Final win
+        $state[] = [
+            'index' => $stateIndex++,
+            'baseWinAmount' => round($totalWin, 2),
+            'finalWin' => round($totalWin, 2),
+            'multipliers' => [],
+            'type' => 'finalWin',
+        ];
+
+        // 9. Bonus exit
+        $state[] = [
+            'index' => $stateIndex++,
+            'totalSpins' => $freeSpinCount,
+            'totalWin' => round($totalWin, 2),
+            'type' => 'bonusExit',
+        ];
+
+        // Обновляем баланс с выигрышем
+        $this->session->balance += (int) round($this->bet * $totalWin);
+        $this->session->save();
+
+        return [
+            'balance' => [
+                'amount' => $this->session->balance,
+                'currency' => 'USD',
+            ],
+            'round' => [
+                'betID' => $seed,
+                'amount' => $this->bet,
+                'payout' => (int) round($this->bet * $totalWin),
+                'payoutMultiplier' => round($totalWin, 2),
+                'active' => $totalWin > 0,
+                'state' => $state,
+                'mode' => 'BONUS',
+                'event' => null,
+            ],
+        ];
     }
 
     private function getRound(): array
@@ -277,6 +522,38 @@ class PlayService
 
         return $board;
     }
+
+    private function generateBonusBoard(): string
+    {
+        // Генерируем доску с бонусными символами 's'
+        // Нужно гарантировать 3-5 бонусных символов
+        $bonusCount = mt_rand(3, 5);
+        $board = str_repeat('x', 15); // Начинаем с пустой доски
+
+        // Размещаем бонусные символы случайно
+        $positions = [];
+        while (count($positions) < $bonusCount) {
+            $pos = mt_rand(0, 14);
+            if (!in_array($pos, $positions)) {
+                $positions[] = $pos;
+            }
+        }
+
+        foreach ($positions as $pos) {
+            $board[$pos] = 's';
+        }
+
+        // Заполняем остальные позиции обычными символами
+        $symbols = ['x', 'x', '1', '2', '4', '5'];
+        for ($i = 0; $i < 15; $i++) {
+            if ($board[$i] === 'x' && !in_array($i, $positions)) {
+                $board[$i] = $symbols[array_rand($symbols)];
+            }
+        }
+
+        return $board;
+    }
+
     private function mine(string $blocks, string $board): array
     {
         if (strlen($blocks) !== 30 || strlen($board) !== 15) {
