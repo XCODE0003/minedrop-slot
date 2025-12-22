@@ -13,15 +13,11 @@ class SessionController extends Controller
             'session_uuid' => Str::uuid(),
             'total_bets' => 0,
             'total_wins' => 0,
-            'balance' => $request->balance,
+            'balance' => $request->balance * 1000000,
             'youtube_mode' => $request->youtube_mode,
             'is_admin' => false,
             'is_active' => true,
         ]);
-        return response()->json([
-            'success' => true,
-            'message' => 'Session created successfully',
-            'data' => $sessionGame,
-        ]);
+        return redirect('/?sessionID=' . $sessionGame->session_uuid . '&rgs_url=localhost:8002/api&lang=ru&currency=USD&device=desktop&social=false&demo=true');
     }
 }

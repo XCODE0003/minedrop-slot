@@ -110,7 +110,7 @@ class PlayService
 
         $round = [
             'balance' => [
-                'amount' => $this->session->balance * 100,
+                'amount' => $this->session->balance,
                 'currency' => 'USD',
             ],
             'round' => [

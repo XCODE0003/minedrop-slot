@@ -23,11 +23,12 @@ class WalletController extends Controller
         $currency = $request->currency;
 
         $playService = new PlayService($sessionGame, $amount);
-        $multiplier = 1;
+        $multiplier = 0.1;
         $playService->setMultiplierSeed($multiplier);
         $win = $multiplier * $amount;
         $sessionGame->balance -= $amount;
         $sessionGame->balance += $win;
+        $sessionGame->save();
 
 
 
@@ -117,6 +118,22 @@ class WalletController extends Controller
                 'error' => 'Session game not found'
             ], 404);
         }
+        return response()->json([
+            'balance' => [
+                'amount' => $sessionGame->balance,
+                'currency' => 'USD'
+            ]
+        ]);
+    }
+    public function balance(Request $request)
+    {
+        $sessionGame = SessionGame::where('session_uuid', $request->sessionID)->first();
+        if (!$sessionGame) {
+            return response()->json([
+                'error' => 'Session game not found'
+            ], 404);
+        }
+
         return response()->json([
             'balance' => [
                 'amount' => $sessionGame->balance,

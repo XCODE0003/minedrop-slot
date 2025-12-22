@@ -9,5 +9,6 @@ Route::get('/', function () {
 });
 Route::post('/wallet/authenticate', [WalletController::class, 'authenticate']);
 Route::post('/wallet/play', [WalletController::class, 'play']);
+Route::post('/wallet/balance', [WalletController::class, 'balance']);
 Route::post('/wallet/end-round', [WalletController::class, 'endRound']);
 Route::get('/session/create', [SessionController::class, 'create']);

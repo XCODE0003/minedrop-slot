@@ -2730,6 +2730,7 @@ async function C0(s, e = 2e3) {
                 try {
                     s(), t();
                 } catch (h) {
+                    console.error(h);
                     n(h);
                 }
                 return;
@@ -6876,7 +6877,9 @@ ke.Circ;
         (i.style.display = "block"), n.appendChild(i), Ro.appendChild(n);
         try {
             r = i.getBBox();
-        } catch {}
+        } catch(e) {
+            console.error(e);
+        }
         return n.removeChild(i), Ro.removeChild(n), r;
     },
     D0 = function (e, t) {
@@ -6887,7 +6890,8 @@ ke.Circ;
         var t, n;
         try {
             t = e.getBBox();
-        } catch {
+        } catch(e) {
+            console.error(e);
             (t = $0(e)), (n = 1);
         }
         return (
@@ -15631,7 +15635,8 @@ function xM() {
                 "param3",
                 "return param1[param2] === param3;"
             )({ a: "b" }, "a", "b") === !0;
-    } catch {
+    } catch(e) {
+        console.error(e);
         Ol = !1;
     }
     return Ol;
@@ -42260,6 +42265,7 @@ function n4(s, e, t = {}) {
                     (r = Date.now()),
                     o();
             } catch (w) {
+
                 i.autoUpdateBalanceOnStartRound ||
                     ((Ke.instantBalance = Ke.instantBalance + Q(Nt)),
                     Ke.update({ duration: 0 })),
@@ -42401,7 +42407,9 @@ function n4(s, e, t = {}) {
                     (Ke.instantBalance =
                         (b == null ? void 0 : b.balance.amount) / es),
                         Ke.update();
-                } catch {}
+                } catch {
+                    console.error(b);
+                }
         };
     return {
         createBetService: () => {
@@ -57226,14 +57234,17 @@ function $V() {
                                         var d = new Audio();
                                         typeof d.oncanplaythrough > "u" &&
                                             (c._canPlayEvent = "canplay");
-                                    } catch {
+                                    } catch(e) {
                                         c.noAudio = !0;
+                                        console.error(e);
                                     }
                                 else c.noAudio = !0;
                             try {
                                 var d = new Audio();
                                 d.muted && (c.noAudio = !0);
-                            } catch {}
+                            } catch(e) {
+                                console.error(e);
+                            }
                             return c.noAudio || c._setupCodecs(), c;
                         },
                         _setupCodecs: function () {
@@ -57241,7 +57252,8 @@ function $V() {
                                 d = null;
                             try {
                                 d = typeof Audio < "u" ? new Audio() : null;
-                            } catch {
+                            } catch(e) {
+                                console.error(e);
                                 return c;
                             }
                             if (!d || typeof d.canPlayType != "function")
@@ -57357,7 +57369,8 @@ function $V() {
                                             var p = new Audio();
                                             (p._unlocked = !0),
                                                 c._releaseHtml5Audio(p);
-                                        } catch {
+                                        } catch(e) {
+                                            console.error(e);
                                             c.noAudio = !0;
                                             break;
                                         }
@@ -58656,7 +58669,9 @@ function $V() {
                             )
                                 try {
                                     c.bufferSource.buffer = t._scratchBuffer;
-                                } catch {}
+                                } catch(e) {
+                                    console.error(e);
+                                }
                             return (c.bufferSource = null), d;
                         },
                         _clearSound: function (c) {
@@ -58910,7 +58925,8 @@ function $V() {
                                         : typeof webkitAudioContext < "u"
                                         ? (t.ctx = new webkitAudioContext())
                                         : (t.usingWebAudio = !1);
-                                } catch {
+                                } catch(e) {
+                                    console.error(e);
                                     t.usingWebAudio = !1;
                                 }
                                 t.ctx || (t.usingWebAudio = !1);
