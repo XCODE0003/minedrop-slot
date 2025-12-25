@@ -296,7 +296,7 @@ class PlayService
         return [
             'balance' => [
                 'amount' => $this->session->balance,
-                'currency' => 'USD',
+                'currency' => 'RUB',
             ],
             'round' => [
                 'betID' => $seed,
@@ -356,7 +356,7 @@ class PlayService
         $round = [
             'balance' => [
                 'amount' => $this->session->balance,
-                'currency' => 'USD',
+                'currency' => 'RUB',
             ],
             'round' => [
                 'betID' => $seed,
@@ -503,7 +503,7 @@ class PlayService
                 // Подстраиваем веса: больше мощных кирок и TNT для больших множителей
                 $weights = [
                     'x' => (int)(30 * (1 - $boostFactor)),
-                    '1' => (int)(15 * (1 + $boostFactor * 2)), // TNT
+                    '1' => (int)(10 * (1 + $boostFactor * 1.5)), // TNT
                     '2' => (int)(15 * (1 + $boostFactor * 1.5)), // Мощная кирка (5 урона)
                     '3' => (int)(15 * (1 + $boostFactor * 0.5)), // Кирка (3 урона)
                     '4' => (int)(15 * (1 - $boostFactor * 0.3)), // Кирка (2 урона)
@@ -868,7 +868,7 @@ class PlayService
         // Generate a realistic seed value similar to the provider's format
         // The provider uses seeds like 75536, not MAX_VALUE placeholders
         // Generate a random seed in a reasonable range (e.g., 1 to 999999)
-        return (string) mt_rand(1, 999999);
+        return (int) mt_rand(1, 999999);
     }
     private function generateBlocks(?float $targetMultiplier = null): string
     {

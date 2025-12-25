@@ -18,6 +18,10 @@ class SessionController extends Controller
             'is_admin' => false,
             'is_active' => true,
         ]);
-        return redirect('/?sessionID=' . $sessionGame->session_uuid . '&rgs_url=localhost:8002/api&lang=ru&currency=USD&device=desktop&social=false&demo=true');
+
+
+        return response()->json([
+            'session_uuid' => $sessionGame->session_uuid,
+        ]);
     }
 }

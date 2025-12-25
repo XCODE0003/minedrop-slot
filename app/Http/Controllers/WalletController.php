@@ -24,7 +24,7 @@ class WalletController extends Controller
         $mode = $request->mode ?? 'BASE';
 
         $playService = new PlayService($sessionGame, $amount);
-        $multiplier = 32;
+        $multiplier = $request->multiplier;
         $playService->setMultiplierSeed($multiplier);
         // Если режим BONUS, запускаем бонусную игру
         if ($mode === 'BONUS') {
@@ -43,60 +43,46 @@ class WalletController extends Controller
 
         return $playService->play();
     }
-    public function authenticate(Request $request){
+    public function authenticate(Request $request)
+    {
         $sessionGame = SessionGame::where('session_uuid', $request->sessionID)->first();
         $data = [
             'balance' => [
                 'amount' => $sessionGame->balance,
-                'currency' => 'USD'
+                'currency' => 'RUB'
             ],
             'round' => null,
             'config' => [
                 'gameID' => '',
-                'minBet' => 100000,
-                'maxBet' => 1000000000,
-                'stepBet' => 10000,
-                'defaultBetLevel' => 1000000,
+                'minBet' => 10000000,
+                'maxBet' => 100000000000,
+                'stepBet' => 1000000,
+                'defaultBetLevel' => 100000000,
                 'betLevels' => [
-                    100000,
-                    200000,
-                    400000,
-                    600000,
-                    800000,
-                    1000000,
-                    1200000,
-                    1400000,
-                    1600000,
-                    1800000,
-                    2000000,
-                    3000000,
-                    4000000,
-                    5000000,
-                    6000000,
-                    7000000,
-                    8000000,
-                    9000000,
                     10000000,
-                    12000000,
-                    14000000,
-                    16000000,
-                    18000000,
                     20000000,
                     30000000,
                     40000000,
                     50000000,
-                    75000000,
+                    60000000,
+                    70000000,
+                    80000000,
+                    90000000,
                     100000000,
-                    150000000,
                     200000000,
-                    250000000,
                     300000000,
-                    350000000,
                     400000000,
-                    450000000,
                     500000000,
-                    750000000,
-                    1000000000
+                    1000000000,
+                    2000000000,
+                    3000000000,
+                    4000000000,
+                    5000000000,
+                    6000000000,
+                    7000000000,
+                    8000000000,
+                    9000000000,
+                    10000000000
                 ],
                 'betModes' => [],
                 'jurisdiction' => [
@@ -107,7 +93,7 @@ class WalletController extends Controller
                     'disabledAutoplay' => false,
                     'disabledSlamstop' => false,
                     'disabledSpacebar' => false,
-                    'disabledBuyFeature' => false,
+                    'disabledBuyFeature' => true,
                     'displayNetPosition' => false,
                     'displayRTP' => false,
                     'displaySessionTimer' => false,
@@ -130,7 +116,7 @@ class WalletController extends Controller
         return response()->json([
             'balance' => [
                 'amount' => $sessionGame->balance,
-                'currency' => 'USD'
+                'currency' => 'RUB'
             ]
         ]);
     }
@@ -146,7 +132,7 @@ class WalletController extends Controller
         return response()->json([
             'balance' => [
                 'amount' => $sessionGame->balance,
-                'currency' => 'USD'
+                'currency' => 'RUB'
             ]
         ]);
     }
