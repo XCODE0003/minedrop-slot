@@ -393,6 +393,23 @@ class PlayService
             $totalWin = $this->calculateWin($pickaxePhase, $tntPhase);
         }
 
+        // Проверяем выпала ли бонуска (3+ символа "s" на board)
+        $bonusCount = substr_count($board, 's');
+        $isBonusTriggered = $bonusCount >= 3;
+
+        // Находим позиции бонусных символов
+        $bonusPositions = [];
+        if ($isBonusTriggered) {
+            $boardRows = str_split($board, 3);
+            foreach ($boardRows as $reel => $row) {
+                $rowSymbols = str_split($row);
+                foreach ($rowSymbols as $rowIndex => $symbol) {
+                    if ($symbol === 's') {
+                        $bonusPositions[] = [$reel, $rowIndex];
+                    }
+                }
+            }
+        }
 
         $round = [
             'balance' => [
@@ -404,16 +421,16 @@ class PlayService
                 'amount' => $this->bet,
                 'payout' => (int) round($this->bet * $totalWin),
                 'payoutMultiplier' => $totalWin,
-                'active' => $totalWin > 0,
+                'active' => $totalWin > 0 || $isBonusTriggered,
                 'state' => [
                     [
                         'index' => 0,
-                        's' => $seed, // ❗ БЕЗ cast
+                        's' => $seed,
                         'type' => 's',
                     ],
                     [
                         'index' => 1,
-                        'anticipation' => 0,
+                        'anticipation' => $bonusCount, // Количество бонусных символов
                         'blocks' => $blocks,
                         'board' => $board,
                         'type' => 'reveal',
@@ -426,7 +443,7 @@ class PlayService
                     ],
                 ],
                 'mode' => 'BASE',
-                'event' => null,
+                'event' => $isBonusTriggered ? 'TRIGGER_BONUS' : null,
             ],
         ];
 
@@ -445,6 +462,17 @@ class PlayService
             'multipliers' => [],
             'type' => 'finalWin',
         ];
+
+        // Если выпала бонуска - добавляем bonusEnter
+        if ($isBonusTriggered) {
+            $round['round']['state'][] = [
+                'index' => count($round['round']['state']),
+                'bonusType' => 'Bonus',
+                'freeSpinCount' => 5,
+                'positions' => $bonusPositions,
+                'type' => 'bonusEnter',
+            ];
+        }
 
         return $round;
     }
@@ -533,8 +561,14 @@ class PlayService
         // x – пусто
         // 1 – TNT
         // 2,3,4,5 – кирки (2=5 урона, 3=3 урона, 4=2 урона, 5=1 урон)
+        // s – бонусный символ (3 штуки = бонуска)
 
         $board = '';
+
+        // 0.5% шанс на бонуску (3 символа "s")
+        if (mt_rand(1, 1000) <= 5) { // 5/1000 = 0.5%
+            return $this->generateBonusBoard();
+        }
 
         if ($targetMultiplier !== null && $targetMultiplier > 10) {
             // Для больших множителей увеличиваем вероятность мощных кирок и TNT
