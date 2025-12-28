@@ -85,7 +85,7 @@ class PlayService
             'type' => 's',
         ];
 
-        // 2. Генерируем начальную доску с бонусными символами (один раз)
+
         $initialBoard = $this->generateBonusBoard();
 
         // Находим позиции бонусных символов (вероятно 's')
@@ -101,7 +101,7 @@ class PlayService
         }
 
         $anticipation = count($bonusPositions);
-        $freeSpinCount = 5; // Фиксированное количество free spins
+        $freeSpinCount = 5;
 
         // Если задан множитель, перебираем варианты до получения нужного выигрыша
         $maxAttempts = $targetMultiplier !== null ? 1000000 : 1;
@@ -114,57 +114,39 @@ class PlayService
             $totalWin = 0.0;
             $allSpinsData = [];
 
-            // Генерируем блоки для первого спина
+            // Генерируем ОДНУ карту блоков на все 5 раундов
             $blocks = $this->generateBlocks($targetMultiplier);
 
-            // 5. Первый спин (начальная доска)
-            $pickaxePhase = $this->mine($blocks, $initialBoard);
-            $tntPhase = $this->tnt($blocks, $initialBoard, $pickaxePhase);
-            $spinWin = $this->calculateWin($pickaxePhase, $tntPhase);
-            $totalWin += $spinWin;
-            $allSpinsData[] = [
-                'board' => $initialBoard,
-                'blocks' => $blocks,
-                'pickaxePhase' => $pickaxePhase,
-                'tntPhase' => $tntPhase,
-                'spinWin' => $spinWin,
-            ];
+            // Состояние для всех раундов: сломанные блоки и HP блоков
+            $alreadyBroken = [];  // Массив индексов уже сломанных блоков
+            $blockHPState = [];   // Состояние HP блоков между раундами
 
-            // 6. Free spins (еще 4 спина после первого)
-            for ($spin = 1; $spin < $freeSpinCount; $spin++) {
-                // Генерируем новую доску для free spin
-                $freeBoard = $this->generateBoard($targetMultiplier);
-                $freeBlocks = $this->generateBlocks($targetMultiplier);
+            // 5 раундов на одной карте блоков
+            for ($spin = 0; $spin < $freeSpinCount; $spin++) {
+                // Генерируем новые кирки (board) для каждого раунда
+                // Первый раунд использует initialBoard с бонусными символами
+                // Остальные раунды - кирки только там, где есть несломанные блоки
+                if ($spin === 0) {
+                    $currentBoard = $initialBoard;
+                } else {
+                    $currentBoard = $this->generateBonusBoardForRound($alreadyBroken, $targetMultiplier);
+                }
 
-                // Mine phase
-                $pickaxePhase = $this->mine($freeBlocks, $freeBoard);
-                $tntPhase = $this->tnt($freeBlocks, $freeBoard, $pickaxePhase);
+                // Используем bonus-версии функций с передачей состояния
+                $pickaxePhase = $this->bonusMine($blocks, $currentBoard, $alreadyBroken, $blockHPState);
+                $tntPhase = $this->bonusTnt($blocks, $currentBoard, $alreadyBroken, $blockHPState);
                 $spinWin = $this->calculateWin($pickaxePhase, $tntPhase);
                 $totalWin += $spinWin;
+
                 $allSpinsData[] = [
-                    'board' => $freeBoard,
-                    'blocks' => $freeBlocks,
+                    'board' => $currentBoard,
+                    'blocks' => $blocks,
                     'pickaxePhase' => $pickaxePhase,
                     'tntPhase' => $tntPhase,
                     'spinWin' => $spinWin,
+                    'alreadyBroken' => $alreadyBroken, // Сохраняем состояние для отладки
                 ];
             }
-
-            // 7. Финальный спин (freeSpinsRemaining: 0)
-            $finalBoard = $this->generateBoard($targetMultiplier);
-            $finalBlocks = $this->generateBlocks($targetMultiplier);
-
-            $pickaxePhase = $this->mine($finalBlocks, $finalBoard);
-            $tntPhase = $this->tnt($finalBlocks, $finalBoard, $pickaxePhase);
-            $spinWin = $this->calculateWin($pickaxePhase, $tntPhase);
-            $totalWin += $spinWin;
-            $allSpinsData[] = [
-                'board' => $finalBoard,
-                'blocks' => $finalBlocks,
-                'pickaxePhase' => $pickaxePhase,
-                'tntPhase' => $tntPhase,
-                'spinWin' => $spinWin,
-            ];
 
             // Проверяем, совпадает ли выигрыш с целевым множителем
             if ($targetMultiplier === null || abs($totalWin - $targetMultiplier) < 0.01) {
@@ -216,12 +198,12 @@ class PlayService
             ];
         }
 
-        // Free spins (4 спина)
+        // Free spins (раунды 2-5, индексы 1-4)
         for ($spin = 1; $spin < $freeSpinCount; $spin++) {
-            $freeSpinsRemaining = $freeSpinCount - $spin;
+            $freeSpinsRemaining = $freeSpinCount - $spin - 1; // Осталось раундов после текущего
             $spinData = $allSpinsData[$spin];
 
-            // Bonus reveal
+            // Bonus reveal - новые кирки на той же карте
             $state[] = [
                 'index' => $stateIndex++,
                 'anticipation' => 0,
@@ -239,37 +221,13 @@ class PlayService
             ];
 
             $currentTotalWin += $spinData['spinWin'];
-            $state[] = [
-                'index' => $stateIndex++,
-                'totalWin' => round($currentTotalWin, 2),
-                'type' => 'totalWin',
-            ];
-        }
-
-        // Финальный спин
-        $spinData = $allSpinsData[$freeSpinCount];
-        $state[] = [
-            'index' => $stateIndex++,
-            'anticipation' => 0,
-            'board' => $spinData['board'],
-            'freeSpinsRemaining' => 0,
-            'type' => 'bonusReveal',
-        ];
-
-        $state[] = [
-            'index' => $stateIndex++,
-            'pickaxePhase' => $spinData['pickaxePhase'],
-            'tntPhase' => $spinData['tntPhase'],
-            'type' => 'mine',
-        ];
-
-        $currentTotalWin += $spinData['spinWin'];
-        if ($spinData['spinWin'] > 0) {
-            $state[] = [
-                'index' => $stateIndex++,
-                'totalWin' => round($currentTotalWin, 2),
-                'type' => 'totalWin',
-            ];
+            if ($spinData['spinWin'] > 0) {
+                $state[] = [
+                    'index' => $stateIndex++,
+                    'totalWin' => round($currentTotalWin, 2),
+                    'type' => 'totalWin',
+                ];
+            }
         }
 
         // 8. Final win
@@ -523,6 +481,58 @@ class PlayService
         return $board;
     }
 
+    /**
+     * Генерирует board для бонусного раунда - кирки только там, где есть несломанные блоки
+     * @param array $alreadyBroken - массив индексов уже сломанных блоков
+     * @param float|null $targetMultiplier - целевой множитель для буста
+     * @return string board (15 символов)
+     */
+    private function generateBonusBoardForRound(array $alreadyBroken, ?float $targetMultiplier = null): string
+    {
+        $board = '';
+
+        // Проверяем каждый reel (5 reels по 3 позиции на board)
+        for ($reel = 0; $reel < 5; $reel++) {
+            // Проверяем есть ли несломанные блоки в этом столбце
+            // Блоки для reel: индексы от reel*6 до reel*6+5
+            $hasUnbrokenBlocks = false;
+            for ($depth = 0; $depth < 6; $depth++) {
+                $blockIndex = $reel * 6 + $depth;
+                if (!in_array($blockIndex, $alreadyBroken)) {
+                    $hasUnbrokenBlocks = true;
+                    break;
+                }
+            }
+
+            // Генерируем 3 позиции для этого reel
+            for ($pos = 0; $pos < 3; $pos++) {
+                if (!$hasUnbrokenBlocks) {
+                    // Все блоки в столбце сломаны - ставим пустоту
+                    $board .= 'x';
+                } else {
+                    // Есть несломанные блоки - генерируем кирку
+                    if ($targetMultiplier !== null && $targetMultiplier > 10) {
+                        $boostFactor = min(($targetMultiplier / 100), 0.7);
+                        $weights = [
+                            'x' => (int)(30 * (1 - $boostFactor)),
+                            '1' => (int)(10 * (1 + $boostFactor * 1.5)), // TNT
+                            '2' => (int)(15 * (1 + $boostFactor * 1.5)), // Мощная кирка (5 урона)
+                            '3' => (int)(15 * (1 + $boostFactor * 0.5)), // Кирка (3 урона)
+                            '4' => (int)(15 * (1 - $boostFactor * 0.3)), // Кирка (2 урона)
+                            '5' => (int)(10 * (1 - $boostFactor * 0.5)), // Кирка (1 урон)
+                        ];
+                        $board .= $this->weightedRandom($weights);
+                    } else {
+                        $symbols = ['x', 'x', '1', '2', '4', '5'];
+                        $board .= $symbols[array_rand($symbols)];
+                    }
+                }
+            }
+        }
+
+        return $board;
+    }
+
     private function generateBonusBoard(): string
     {
         // Генерируем доску с бонусными символами 's'
@@ -692,6 +702,307 @@ class PlayService
         }
 
         return $pickaxePhase;
+    }
+
+    /**
+     * Bonus Mine - кирки для бонусной игры с учетом уже сломанных блоков
+     * @param string $blocks - карта блоков (30 символов)
+     * @param string $board - текущие кирки (15 символов)
+     * @param array &$alreadyBroken - массив индексов уже сломанных блоков (по ссылке, обновляется)
+     * @param array &$blockHPState - состояние HP блоков между раундами (по ссылке)
+     * @return array pickaxePhase
+     */
+    private function bonusMine(string $blocks, string $board, array &$alreadyBroken, array &$blockHPState): array
+    {
+        if (strlen($blocks) !== 30 || strlen($board) !== 15) {
+            return [];
+        }
+
+        $blockRows = str_split($blocks, 6);
+        $boardRows = str_split($board, 3);
+
+        $pickaxePhase = [];
+
+        foreach ($blockRows as $reel => $row) {
+            $rowBlocks = str_split($row);
+            $boardRow = str_split($boardRows[$reel]);
+
+            $pickaxes = [];
+            foreach ($boardRow as $col => $symbol) {
+                if ($symbol !== 'x' && isset($this->pickaxeHits[$symbol])) {
+                    $pickaxes[] = [
+                        'symbol' => $symbol,
+                        'damage' => $this->pickaxeHits[$symbol],
+                        'col' => $col,
+                    ];
+                }
+            }
+
+            if (!$pickaxes) {
+                continue;
+            }
+
+            usort($pickaxes, function ($a, $b) {
+                if ($a['damage'] === $b['damage']) {
+                    return $a['col'] <=> $b['col'];
+                }
+                return $a['damage'] <=> $b['damage'];
+            });
+
+            $allBroken = [];
+            $pickaxesOut = [];
+
+            // Находим первый несломанный блок в этом ряду
+            $currentIndex = 0;
+            for ($i = 0; $i < 6; $i++) {
+                $globalIndex = $reel * 6 + $i;
+                if (!in_array($globalIndex, $alreadyBroken)) {
+                    $currentIndex = $i;
+                    break;
+                }
+                if ($i === 5) {
+                    $currentIndex = 6; // Все блоки сломаны
+                }
+            }
+
+            foreach ($pickaxes as $pickaxe) {
+                $damage = $pickaxe['damage'];
+
+                $localBroken = [];
+                $localPayout = 0.0;
+                $is_broken = false;
+                $lastBlock = null;
+                $lastHP = null;
+                $lastBlockIndex = null;
+
+                while ($currentIndex < 6 && $damage > 0) {
+                    $globalIndex = $reel * 6 + $currentIndex;
+
+                    // Пропускаем уже сломанные блоки
+                    if (in_array($globalIndex, $alreadyBroken)) {
+                        $currentIndex++;
+                        continue;
+                    }
+
+                    $block = $rowBlocks[$currentIndex];
+                    $baseHP = $this->blockHP[$block] ?? null;
+                    if ($baseHP === null) {
+                        break;
+                    }
+
+                    // Получаем текущее HP из состояния или инициализируем
+                    if (!isset($blockHPState[$globalIndex])) {
+                        $blockHPState[$globalIndex] = $baseHP;
+                    }
+                    $hp = $blockHPState[$globalIndex];
+
+                    // Пропускаем если блок уже сломан
+                    if ($hp <= 0) {
+                        $currentIndex++;
+                        continue;
+                    }
+
+                    // 1 урон за удар
+                    $hp--;
+                    $damage--;
+                    $blockHPState[$globalIndex] = $hp;
+
+                    $lastBlockIndex = $globalIndex;
+
+                    // Если блок сломан
+                    if ($hp <= 0) {
+                        if (!in_array($globalIndex, $localBroken)) {
+                            $localBroken[] = $globalIndex;
+                            $is_broken = true;
+                        }
+                        if (!in_array($globalIndex, $allBroken)) {
+                            $allBroken[] = $globalIndex;
+                        }
+                        // Добавляем в общий список сломанных
+                        if (!in_array($globalIndex, $alreadyBroken)) {
+                            $alreadyBroken[] = $globalIndex;
+                        }
+
+                        if (isset($this->blockPayout[$block])) {
+                            $localPayout += (float) $this->blockPayout[$block];
+                        }
+                    }
+
+                    $lastBlock = $block;
+                    $lastHP = $hp;
+
+                    // Переходим к следующему блоку только если текущий сломан и есть урон
+                    if ($hp <= 0 && $damage > 0) {
+                        $currentIndex++;
+                        // Пропускаем уже сломанные
+                        while ($currentIndex < 6 && in_array($reel * 6 + $currentIndex, $alreadyBroken)) {
+                            $currentIndex++;
+                        }
+                    }
+                }
+
+                if ($localBroken || $lastBlockIndex !== null) {
+                    $pickaxesOut[] = [
+                        'breakBlock' => $lastBlockIndex !== null ? $lastBlockIndex : max(end($localBroken), $reel * 6 + $pickaxe['col']),
+                        'payout' => (float) $localPayout,
+                        'row' => $pickaxe['col'],
+                        'symbol' => $pickaxe['symbol'],
+                        'hp' => $lastHP,
+                        'damage' => $pickaxe['damage'],
+                        'block' => $lastBlock,
+                        'is_broken' => $is_broken,
+                    ];
+                }
+            }
+
+            if ($pickaxesOut) {
+                $allBroken = array_values(array_unique($allBroken));
+                sort($allBroken);
+
+                $pickaxePhase[] = [
+                    'brokenBlocks' => $allBroken,
+                    'pickaxes' => $pickaxesOut,
+                    'reel' => $reel,
+                ];
+            }
+        }
+
+        return $pickaxePhase;
+    }
+
+    /**
+     * Bonus TNT - взрывы для бонусной игры с учетом уже сломанных блоков
+     * @param string $blocks - карта блоков (30 символов)
+     * @param string $board - текущие кирки (15 символов)
+     * @param array &$alreadyBroken - массив индексов уже сломанных блоков (по ссылке, обновляется)
+     * @param array &$blockHPState - состояние HP блоков между раундами (по ссылке)
+     * @return array tntPhase
+     */
+    private function bonusTnt(string $blocks, string $board, array &$alreadyBroken, array &$blockHPState): array
+    {
+        if (strlen($blocks) !== 30 || strlen($board) !== 15) {
+            return [];
+        }
+
+        $blockRows = str_split($blocks, 6);
+        $boardRows = str_split($board, 3);
+
+        $tntPhase = [];
+        foreach ($boardRows as $reel => $boardRow) {
+            $rowSymbols = str_split($boardRow);
+            foreach ($rowSymbols as $boardRowIndex => $symbol) {
+                if ($symbol !== '1') {
+                    continue;
+                }
+
+                // TNT падает до первой неразрушенной клетки в столбце
+                $landingDepth = null;
+                for ($depth = 0; $depth < 6; $depth++) {
+                    $gIndex = $reel * 6 + $depth;
+                    // Проверяем что блок не в списке сломанных И имеет HP > 0
+                    if (!in_array($gIndex, $alreadyBroken)) {
+                        if (!isset($blockHPState[$gIndex])) {
+                            $blockType = $blocks[$gIndex] ?? null;
+                            if ($blockType && isset($this->blockHP[$blockType])) {
+                                $blockHPState[$gIndex] = $this->blockHP[$blockType];
+                            }
+                        }
+                        if (isset($blockHPState[$gIndex]) && $blockHPState[$gIndex] > 0) {
+                            $landingDepth = $depth;
+                            break;
+                        }
+                    }
+                }
+                if ($landingDepth === null) {
+                    continue; // столбец пуст — нечего взрывать
+                }
+
+                $tntBlockIndex = $reel * 6 + $landingDepth;
+                $neighbors = [];
+
+                // тот же столбец (вверх/вниз от landingDepth)
+                if ($landingDepth > 0)
+                    $neighbors[] = $reel * 6 + ($landingDepth - 1);
+                if ($landingDepth < 5)
+                    $neighbors[] = $reel * 6 + ($landingDepth + 1);
+
+                // соседние столбцы
+                if ($reel > 0) {
+                    if ($landingDepth > 0)
+                        $neighbors[] = ($reel - 1) * 6 + ($landingDepth - 1);
+                    $neighbors[] = ($reel - 1) * 6 + $landingDepth;
+                    if ($landingDepth < 5)
+                        $neighbors[] = ($reel - 1) * 6 + ($landingDepth + 1);
+                }
+                if ($reel < 4) {
+                    if ($landingDepth > 0)
+                        $neighbors[] = ($reel + 1) * 6 + ($landingDepth - 1);
+                    $neighbors[] = ($reel + 1) * 6 + $landingDepth;
+                    if ($landingDepth < 5)
+                        $neighbors[] = ($reel + 1) * 6 + ($landingDepth + 1);
+                }
+
+                $brokenBlocks = [];
+                $payout = 0.0;
+                $didDamage = false;
+
+                $targets = array_merge([$tntBlockIndex], $neighbors);
+
+                foreach ($targets as $targetIndex) {
+                    // Пропускаем уже сломанные блоки
+                    if (in_array($targetIndex, $alreadyBroken)) {
+                        continue;
+                    }
+
+                    if (!isset($blockHPState[$targetIndex])) {
+                        $blockType = $blocks[$targetIndex] ?? null;
+                        if ($blockType && isset($this->blockHP[$blockType])) {
+                            $blockHPState[$targetIndex] = $this->blockHP[$blockType];
+                        } else {
+                            continue;
+                        }
+                    }
+
+                    $hp = $blockHPState[$targetIndex];
+                    if ($hp <= 0) {
+                        continue;
+                    }
+
+                    $hp -= 2; // TNT урон
+                    $blockHPState[$targetIndex] = $hp;
+                    $didDamage = true;
+
+                    if ($hp <= 0) {
+                        $brokenBlocks[] = $targetIndex;
+                        // Добавляем в общий список сломанных
+                        if (!in_array($targetIndex, $alreadyBroken)) {
+                            $alreadyBroken[] = $targetIndex;
+                        }
+
+                        // тип блока для выплаты
+                        $blockReel = intdiv($targetIndex, 6);
+                        $blockDepth = $targetIndex % 6;
+                        $blockType = $blockRows[$blockReel][$blockDepth] ?? null;
+                        if ($blockType && isset($this->blockPayout[$blockType])) {
+                            $payout += (float) $this->blockPayout[$blockType];
+                        }
+                    }
+                }
+
+                if ($didDamage) {
+                    sort($brokenBlocks);
+                    $tntPhase[] = [
+                        'blockIndex' => $tntBlockIndex,
+                        'brokenBlocks' => $brokenBlocks,
+                        'payout' => round($payout, 1),
+                        'reel' => $reel,
+                        'row' => $boardRowIndex,
+                    ];
+                }
+            }
+        }
+
+        return $tntPhase;
     }
 
     private function tnt(string $blocks, string $board, array $pickaxePhase): array
@@ -986,6 +1297,439 @@ class PlayService
         return array_key_first($weights);
     }
 
-
+    public function bonusRound(Request $request){
+        $total_map = $this->generateBlocks(5);
+        $data = [
+            'balance' => [
+                'amount' => 900000000,
+                'currency' => 'USD'
+            ],
+            'round' => [
+                'betID' => 3147892704,
+                'amount' => 1000000,
+                'payout' => 2600000,
+                'payoutMultiplier' => 2.6,
+                'active' => true,
+                'state' => [
+                    [
+                        'index' => 0,
+                        's' => 14616498720613603000,
+                        'type' => 's'
+                    ],
+                    [
+                        'anticipation' => 3,
+                        'blocks' => 'ddcrmgdccrgoddcrgmddcrmoddcrgo',
+                        'board' => 'x5x5sx5xs5xxxs5',
+                        'index' => 1,
+                        'type' => 'reveal'
+                    ],
+                    [
+                        'bonusType' => 'Bonus',
+                        'freeSpinCount' => 5,
+                        'index' => 2,
+                        'positions' => [
+                            [
+                                1,
+                                1
+                            ],
+                            [
+                                2,
+                                2
+                            ],
+                            [
+                                4,
+                                1
+                            ]
+                        ],
+                        'type' => 'bonusEnter'
+                    ],
+                    [
+                        'index' => 3,
+                        'pickaxePhase' => [
+                            [
+                                'brokenBlocks' => [
+                                    0
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 0,
+                                        'payout' => 0,
+                                        'row' => 1,
+                                        'symbol' => '5'
+                                    ]
+                                ],
+                                'reel' => 0
+                            ],
+                            [
+                                'brokenBlocks' => [
+                                    6
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 6,
+                                        'payout' => 0,
+                                        'row' => 0,
+                                        'symbol' => '5'
+                                    ]
+                                ],
+                                'reel' => 1
+                            ],
+                            [
+                                'brokenBlocks' => [
+                                    12
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 12,
+                                        'payout' => 0,
+                                        'row' => 0,
+                                        'symbol' => '5'
+                                    ]
+                                ],
+                                'reel' => 2
+                            ],
+                            [
+                                'brokenBlocks' => [
+                                    18
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 18,
+                                        'payout' => 0,
+                                        'row' => 0,
+                                        'symbol' => '5'
+                                    ]
+                                ],
+                                'reel' => 3
+                            ],
+                            [
+                                'brokenBlocks' => [
+                                    24
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 24,
+                                        'payout' => 0,
+                                        'row' => 2,
+                                        'symbol' => '5'
+                                    ]
+                                ],
+                                'reel' => 4
+                            ]
+                        ],
+                        'tntPhase' => [],
+                        'type' => 'mine'
+                    ],
+                    [
+                        'index' => 4,
+                        'totalWin' => 0,
+                        'type' => 'totalWin'
+                    ],
+                    [
+                        'anticipation' => 0,
+                        'board' => 'x5x5x55xxx25xxx',
+                        'freeSpinsRemaining' => 3,
+                        'index' => 5,
+                        'type' => 'bonusReveal'
+                    ],
+                    [
+                        'index' => 6,
+                        'pickaxePhase' => [
+                            [
+                                'brokenBlocks' => [
+                                    1
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 1,
+                                        'payout' => 0,
+                                        'row' => 1,
+                                        'symbol' => '5'
+                                    ]
+                                ],
+                                'reel' => 0
+                            ],
+                            [
+                                'brokenBlocks' => [
+                                    7
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 7,
+                                        'payout' => 0,
+                                        'row' => 0,
+                                        'symbol' => '5'
+                                    ],
+                                    [
+                                        'breakBlock' => 7,
+                                        'payout' => 0.1,
+                                        'row' => 2,
+                                        'symbol' => '5'
+                                    ]
+                                ],
+                                'reel' => 1
+                            ],
+                            [
+                                'brokenBlocks' => [
+                                    13
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 13,
+                                        'payout' => 0,
+                                        'row' => 0,
+                                        'symbol' => '5'
+                                    ]
+                                ],
+                                'reel' => 2
+                            ],
+                            [
+                                'brokenBlocks' => [
+                                    19,
+                                    20
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 19,
+                                        'payout' => 0,
+                                        'row' => 2,
+                                        'symbol' => '5'
+                                    ],
+                                    [
+                                        'breakBlock' => 21,
+                                        'payout' => 0.1,
+                                        'row' => 1,
+                                        'symbol' => '2'
+                                    ]
+                                ],
+                                'reel' => 3
+                            ]
+                        ],
+                        'tntPhase' => [],
+                        'type' => 'mine'
+                    ],
+                    [
+                        'index' => 7,
+                        'totalWin' => 0.2,
+                        'type' => 'totalWin'
+                    ],
+                    [
+                        'anticipation' => 0,
+                        'board' => '3xxxx2x5x54xxxx',
+                        'freeSpinsRemaining' => 2,
+                        'index' => 8,
+                        'type' => 'bonusReveal'
+                    ],
+                    [
+                        'index' => 9,
+                        'pickaxePhase' => [
+                            [
+                                'brokenBlocks' => [
+                                    2
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 3,
+                                        'payout' => 0.1,
+                                        'row' => 0,
+                                        'symbol' => '3'
+                                    ]
+                                ],
+                                'reel' => 0
+                            ],
+                            [
+                                'brokenBlocks' => [
+                                    8
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 9,
+                                        'payout' => 0.1,
+                                        'row' => 2,
+                                        'symbol' => '2'
+                                    ]
+                                ],
+                                'reel' => 1
+                            ],
+                            [
+                                'brokenBlocks' => [],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 14,
+                                        'payout' => 0,
+                                        'row' => 1,
+                                        'symbol' => '5'
+                                    ]
+                                ],
+                                'reel' => 2
+                            ],
+                            [
+                                'brokenBlocks' => [
+                                    21
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 21,
+                                        'payout' => 1,
+                                        'row' => 0,
+                                        'symbol' => '5'
+                                    ],
+                                    [
+                                        'breakBlock' => 22,
+                                        'payout' => 0,
+                                        'row' => 1,
+                                        'symbol' => '4'
+                                    ]
+                                ],
+                                'reel' => 3
+                            ]
+                        ],
+                        'tntPhase' => [],
+                        'type' => 'mine'
+                    ],
+                    [
+                        'index' => 10,
+                        'totalWin' => 1.4,
+                        'type' => 'totalWin'
+                    ],
+                    [
+                        'anticipation' => 0,
+                        'board' => 'xxxxxx54x55xxxx',
+                        'freeSpinsRemaining' => 1,
+                        'index' => 11,
+                        'type' => 'bonusReveal'
+                    ],
+                    [
+                        'index' => 12,
+                        'pickaxePhase' => [
+                            [
+                                'brokenBlocks' => [
+                                    14
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 14,
+                                        'payout' => 0.1,
+                                        'row' => 0,
+                                        'symbol' => '5'
+                                    ],
+                                    [
+                                        'breakBlock' => 15,
+                                        'payout' => 0,
+                                        'row' => 1,
+                                        'symbol' => '4'
+                                    ]
+                                ],
+                                'reel' => 2
+                            ],
+                            [
+                                'brokenBlocks' => [],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 22,
+                                        'payout' => 0,
+                                        'row' => 0,
+                                        'symbol' => '5'
+                                    ],
+                                    [
+                                        'breakBlock' => 22,
+                                        'payout' => 0,
+                                        'row' => 1,
+                                        'symbol' => '5'
+                                    ]
+                                ],
+                                'reel' => 3
+                            ]
+                        ],
+                        'tntPhase' => [],
+                        'type' => 'mine'
+                    ],
+                    [
+                        'index' => 13,
+                        'totalWin' => 1.5,
+                        'type' => 'totalWin'
+                    ],
+                    [
+                        'anticipation' => 0,
+                        'board' => 'xx1x3xxxxxxx5x3',
+                        'freeSpinsRemaining' => 0,
+                        'index' => 14,
+                        'type' => 'bonusReveal'
+                    ],
+                    [
+                        'index' => 15,
+                        'pickaxePhase' => [
+                            [
+                                'brokenBlocks' => [
+                                    9
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 10,
+                                        'payout' => 1,
+                                        'row' => 1,
+                                        'symbol' => '3'
+                                    ]
+                                ],
+                                'reel' => 1
+                            ],
+                            [
+                                'brokenBlocks' => [
+                                    25,
+                                    26
+                                ],
+                                'pickaxes' => [
+                                    [
+                                        'breakBlock' => 25,
+                                        'payout' => 0,
+                                        'row' => 0,
+                                        'symbol' => '5'
+                                    ],
+                                    [
+                                        'breakBlock' => 27,
+                                        'payout' => 0.1,
+                                        'row' => 2,
+                                        'symbol' => '3'
+                                    ]
+                                ],
+                                'reel' => 4
+                            ]
+                        ],
+                        'tntPhase' => [
+                            [
+                                'blockIndex' => 3,
+                                'brokenBlocks' => [],
+                                'payout' => 0,
+                                'reel' => 0,
+                                'row' => 2
+                            ]
+                        ],
+                        'type' => 'mine'
+                    ],
+                    [
+                        'index' => 16,
+                        'totalWin' => 2.6,
+                        'type' => 'totalWin'
+                    ],
+                    [
+                        'baseWinAmount' => 2.6,
+                        'finalWin' => 2.6,
+                        'index' => 17,
+                        'multipliers' => [],
+                        'type' => 'finalWin'
+                    ],
+                    [
+                        'index' => 18,
+                        'totalSpins' => 5,
+                        'totalWin' => 2.6,
+                        'type' => 'bonusExit'
+                    ]
+                ],
+                'mode' => 'BONUS',
+                'event' => null
+            ]
+        ];
+        return response()->json($data);
+    }
 
 }

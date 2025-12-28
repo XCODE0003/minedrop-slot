@@ -28,7 +28,6 @@ class WalletController extends Controller
         $playService->setMultiplierSeed($multiplier);
         // Если режим BONUS, запускаем бонусную игру
         if ($mode === 'BONUS') {
-            // Списываем ставку при покупке бонусной игры
             $sessionGame->balance -= $amount;
             $sessionGame->save();
 
@@ -43,6 +42,8 @@ class WalletController extends Controller
 
         return $playService->play();
     }
+
+
     public function authenticate(Request $request)
     {
         $sessionGame = SessionGame::where('session_uuid', $request->sessionID)->first();
