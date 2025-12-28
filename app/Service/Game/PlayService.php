@@ -125,11 +125,11 @@ class PlayService
             for ($spin = 0; $spin < $freeSpinCount; $spin++) {
                 // Генерируем новые кирки (board) для каждого раунда
                 // Первый раунд использует initialBoard с бонусными символами
-                // Остальные раунды - кирки только там, где есть несломанные блоки
+                // Остальные раунды - кирки распределяются равномерно по оставшимся раундам
                 if ($spin === 0) {
                     $currentBoard = $initialBoard;
                 } else {
-                    $currentBoard = $this->generateBonusBoardForRound($alreadyBroken, $targetMultiplier);
+                    $currentBoard = $this->generateBonusBoardForRound($alreadyBroken, $spin, $freeSpinCount, $targetMultiplier);
                 }
 
                 // Используем bonus-версии функций с передачей состояния
@@ -148,12 +148,39 @@ class PlayService
                 ];
             }
 
-            // Проверяем, совпадает ли выигрыш с целевым множителем
-            if ($targetMultiplier === null || abs($totalWin - $targetMultiplier) < 0.01) {
-                break; // Нашли нужный результат
+            // Для бонуски - выходим после первой попытки, множители добьём через сундуки
+            if ($targetMultiplier === null) {
+                break;
+            }
+
+            // Если выигрыш достаточен - выходим
+            if ($totalWin >= $targetMultiplier || abs($totalWin - $targetMultiplier) < 0.01) {
+                break;
             }
 
             $attempt++;
+        }
+
+        // Рассчитываем множители из сундуков если выигрыш от блоков недостаточен
+        $multipliers = [];
+        $baseWinAmount = $totalWin;
+        $finalWinAmount = $totalWin;
+
+        if ($targetMultiplier !== null && $totalWin > 0 && $totalWin < $targetMultiplier) {
+            // Нужный общий множитель от сундуков
+            $requiredMultiplier = $targetMultiplier / $totalWin;
+
+            // Генерируем массив множителей (сундуков)
+            $multipliers = $this->generateChestMultipliers($requiredMultiplier);
+
+            // Итоговый выигрыш = baseWin * сумма множителей
+            $multiplierSum = array_sum($multipliers);
+            $finalWinAmount = $baseWinAmount * $multiplierSum;
+        } elseif ($targetMultiplier !== null && $totalWin == 0) {
+            // Если выигрыш 0, но нужен множитель - даём минимальный выигрыш
+            $baseWinAmount = 0.1;
+            $multipliers = $this->generateChestMultipliers($targetMultiplier / $baseWinAmount);
+            $finalWinAmount = $baseWinAmount * array_sum($multipliers);
         }
 
         // Используем блоки из первого спина для reveal
@@ -221,21 +248,21 @@ class PlayService
             ];
 
             $currentTotalWin += $spinData['spinWin'];
-            if ($spinData['spinWin'] > 0) {
-                $state[] = [
-                    'index' => $stateIndex++,
-                    'totalWin' => round($currentTotalWin, 2),
-                    'type' => 'totalWin',
-                ];
-            }
+
+            // Показываем totalWin после каждого раунда (даже если spinWin = 0)
+            $state[] = [
+                'index' => $stateIndex++,
+                'totalWin' => round($currentTotalWin, 2),
+                'type' => 'totalWin',
+            ];
         }
 
-        // 8. Final win
+        // 8. Final win (с множителями из сундуков если нужно)
         $state[] = [
             'index' => $stateIndex++,
-            'baseWinAmount' => round($totalWin, 2),
-            'finalWin' => round($totalWin, 2),
-            'multipliers' => [],
+            'baseWinAmount' => round($baseWinAmount, 2),
+            'finalWin' => round($finalWinAmount, 2),
+            'multipliers' => $multipliers,
             'type' => 'finalWin',
         ];
 
@@ -243,12 +270,12 @@ class PlayService
         $state[] = [
             'index' => $stateIndex++,
             'totalSpins' => $freeSpinCount,
-            'totalWin' => round($totalWin, 2),
+            'totalWin' => round($finalWinAmount, 2),
             'type' => 'bonusExit',
         ];
 
-        // Обновляем баланс с выигрышем
-        $this->session->balance += (int) round($this->bet * $totalWin);
+        // Обновляем баланс с выигрышем (с учётом множителей)
+        $this->session->balance += (int) round($this->bet * $finalWinAmount);
         $this->session->save();
 
         return [
@@ -259,14 +286,70 @@ class PlayService
             'round' => [
                 'betID' => $seed,
                 'amount' => $this->bet,
-                'payout' => (int) round($this->bet * $totalWin),
-                'payoutMultiplier' => round($totalWin, 2),
-                'active' => $totalWin > 0,
+                'payout' => (int) round($this->bet * $finalWinAmount),
+                'payoutMultiplier' => round($finalWinAmount, 2),
+                'active' => $finalWinAmount > 0,
                 'state' => $state,
                 'mode' => 'BONUS',
                 'event' => null,
             ],
         ];
+    }
+
+    /**
+     * Генерирует массив множителей из сундуков для достижения нужного общего множителя
+     * @param float $requiredMultiplier - нужный общий множитель (сумма всех множителей)
+     * @return array - массив множителей (например [3, 2] для x5)
+     */
+    private function generateChestMultipliers(float $requiredMultiplier): array
+    {
+        // Доступные множители из сундуков
+        $availableMultipliers = [2, 3, 5, 10];
+        $multipliers = [];
+        $remaining = $requiredMultiplier;
+
+        // Ограничиваем количество сундуков (максимум 5)
+        $maxChests = 5;
+        $chestCount = 0;
+
+        while ($remaining > 1 && $chestCount < $maxChests) {
+            // Выбираем подходящий множитель
+            $bestMultiplier = null;
+
+            // Сначала пробуем найти точное совпадение
+            foreach ($availableMultipliers as $mult) {
+                if (abs($mult - $remaining) < 0.5) {
+                    $bestMultiplier = $mult;
+                    break;
+                }
+            }
+
+            // Если точного нет - берём максимальный который меньше remaining
+            if ($bestMultiplier === null) {
+                foreach (array_reverse($availableMultipliers) as $mult) {
+                    if ($mult <= $remaining) {
+                        $bestMultiplier = $mult;
+                        break;
+                    }
+                }
+            }
+
+            // Если всё ещё нет - берём минимальный
+            if ($bestMultiplier === null) {
+                $bestMultiplier = $availableMultipliers[0]; // 2
+            }
+
+            $multipliers[] = $bestMultiplier;
+            $remaining -= $bestMultiplier;
+            $chestCount++;
+        }
+
+        // Если массив пустой, добавляем минимальный множитель
+        if (empty($multipliers)) {
+            $multipliers[] = max(2, (int) round($requiredMultiplier));
+        }
+
+        return $multipliers;
     }
 
     private function getRound(): array
@@ -482,55 +565,119 @@ class PlayService
     }
 
     /**
-     * Генерирует board для бонусного раунда - кирки только там, где есть несломанные блоки
+     * Генерирует board для бонусного раунда - распределяет кирки равномерно по всем раундам
      * @param array $alreadyBroken - массив индексов уже сломанных блоков
+     * @param int $currentRound - текущий раунд (0-4)
+     * @param int $totalRounds - всего раундов (5)
      * @param float|null $targetMultiplier - целевой множитель для буста
      * @return string board (15 символов)
      */
-    private function generateBonusBoardForRound(array $alreadyBroken, ?float $targetMultiplier = null): string
+    private function generateBonusBoardForRound(array $alreadyBroken, int $currentRound, int $totalRounds, ?float $targetMultiplier = null): string
     {
         $board = '';
 
+        // Считаем сколько блоков осталось
+        $totalBlocks = 30;
+        $brokenCount = count($alreadyBroken);
+        $remainingBlocks = $totalBlocks - $brokenCount;
+
+        // Сколько раундов осталось (включая текущий)
+        $remainingRounds = $totalRounds - $currentRound;
+
+        // Целевое количество блоков для разрушения в этом раунде
+        // Распределяем оставшиеся блоки равномерно по оставшимся раундам
+        $targetBlocksThisRound = $remainingRounds > 0 ? ceil($remainingBlocks / $remainingRounds) : $remainingBlocks;
+
+        // Ограничиваем минимум 2-3 блока, максимум 8-10 блоков за раунд
+        $targetBlocksThisRound = max(2, min(8, $targetBlocksThisRound));
+
+        // Рассчитываем силу кирок на основе целевого количества блоков
+        // Чем больше блоков нужно сломать - тем сильнее кирки
+        $pickaxeStrength = $this->calculatePickaxeStrength($targetBlocksThisRound, $remainingBlocks);
+
         // Проверяем каждый reel (5 reels по 3 позиции на board)
         for ($reel = 0; $reel < 5; $reel++) {
-            // Проверяем есть ли несломанные блоки в этом столбце
-            // Блоки для reel: индексы от reel*6 до reel*6+5
-            $hasUnbrokenBlocks = false;
+            // Считаем несломанные блоки в этом столбце
+            $unbrokenInReel = 0;
             for ($depth = 0; $depth < 6; $depth++) {
                 $blockIndex = $reel * 6 + $depth;
                 if (!in_array($blockIndex, $alreadyBroken)) {
-                    $hasUnbrokenBlocks = true;
-                    break;
+                    $unbrokenInReel++;
                 }
             }
 
             // Генерируем 3 позиции для этого reel
             for ($pos = 0; $pos < 3; $pos++) {
-                if (!$hasUnbrokenBlocks) {
+                if ($unbrokenInReel === 0) {
                     // Все блоки в столбце сломаны - ставим пустоту
                     $board .= 'x';
                 } else {
-                    // Есть несломанные блоки - генерируем кирку
-                    if ($targetMultiplier !== null && $targetMultiplier > 10) {
-                        $boostFactor = min(($targetMultiplier / 100), 0.7);
-                        $weights = [
-                            'x' => (int)(30 * (1 - $boostFactor)),
-                            '1' => (int)(10 * (1 + $boostFactor * 1.5)), // TNT
-                            '2' => (int)(15 * (1 + $boostFactor * 1.5)), // Мощная кирка (5 урона)
-                            '3' => (int)(15 * (1 + $boostFactor * 0.5)), // Кирка (3 урона)
-                            '4' => (int)(15 * (1 - $boostFactor * 0.3)), // Кирка (2 урона)
-                            '5' => (int)(10 * (1 - $boostFactor * 0.5)), // Кирка (1 урон)
-                        ];
-                        $board .= $this->weightedRandom($weights);
-                    } else {
-                        $symbols = ['x', 'x', '1', '2', '4', '5'];
-                        $board .= $symbols[array_rand($symbols)];
-                    }
+                    // Есть несломанные блоки - генерируем кирку с учётом силы
+                    $board .= $this->generatePickaxeByStrength($pickaxeStrength, $targetMultiplier);
                 }
             }
         }
 
         return $board;
+    }
+
+    /**
+     * Рассчитывает силу кирок для раунда
+     * @param int $targetBlocks - сколько блоков нужно сломать
+     * @param int $remainingBlocks - сколько блоков осталось
+     * @return float - коэффициент силы (0.0 - слабые, 1.0 - сильные)
+     */
+    private function calculatePickaxeStrength(int $targetBlocks, int $remainingBlocks): float
+    {
+        if ($remainingBlocks <= 0) {
+            return 0.0;
+        }
+
+        // Базовая сила на основе доли блоков для разрушения
+        $ratio = $targetBlocks / max(1, $remainingBlocks);
+
+        // Нормализуем к диапазону 0.2 - 0.8
+        // Не даём слишком слабые или слишком сильные кирки
+        return max(0.2, min(0.8, $ratio));
+    }
+
+    /**
+     * Генерирует символ кирки на основе силы
+     * @param float $strength - коэффициент силы (0.0 - 1.0)
+     * @param float|null $targetMultiplier - целевой множитель
+     * @return string - символ кирки
+     */
+    private function generatePickaxeByStrength(float $strength, ?float $targetMultiplier = null): string
+    {
+        // Базовые веса
+        // x - пусто, 1 - TNT, 2 - 5 урона, 3 - 3 урона, 4 - 2 урона, 5 - 1 урон
+
+        // Чем выше strength, тем меньше пустых и слабых, больше сильных
+        $emptyWeight = (int)(40 * (1 - $strength));      // 40 -> 8 при strength 0.8
+        $tntWeight = (int)(5 + 10 * $strength);          // 5 -> 13
+        $strongWeight = (int)(5 + 15 * $strength);       // 5 -> 17 (5 урона)
+        $mediumWeight = (int)(10 + 10 * $strength);      // 10 -> 18 (3 урона)
+        $weakWeight = (int)(15 * (1 - $strength * 0.5)); // 15 -> 9 (2 урона)
+        $veryWeakWeight = (int)(10 * (1 - $strength));   // 10 -> 2 (1 урон)
+
+        // Если есть целевой множитель, корректируем
+        if ($targetMultiplier !== null && $targetMultiplier > 20) {
+            $boostFactor = min(($targetMultiplier / 150), 0.5);
+            $emptyWeight = (int)($emptyWeight * (1 - $boostFactor));
+            $tntWeight = (int)($tntWeight * (1 + $boostFactor));
+            $strongWeight = (int)($strongWeight * (1 + $boostFactor));
+        }
+
+        $weights = [
+            'x' => max(1, $emptyWeight),
+            '1' => max(1, $tntWeight),
+            '2' => max(1, $strongWeight),
+            '3' => max(1, $mediumWeight),
+            '4' => max(1, $weakWeight),
+            '5' => max(1, $veryWeakWeight),
+        ];
+
+        return $this->weightedRandom($weights);
     }
 
     private function generateBonusBoard(): string
