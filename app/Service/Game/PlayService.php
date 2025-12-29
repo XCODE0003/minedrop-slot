@@ -113,10 +113,8 @@ class PlayService
             $totalWin = 0.0;
             $allSpinsData = [];
 
-            // Генерируем ОДНУ карту блоков на все 5 раундов
             $blocks = $this->generateBlocks($targetMultiplier);
 
-            // Состояние для всех раундов: сломанные блоки и HP блоков
             $alreadyBroken = [];  // Массив индексов уже сломанных блоков
             $blockHPState = [];   // Состояние HP блоков между раундами
 
@@ -714,9 +712,7 @@ class PlayService
 
     private function generateBonusBoard(): string
     {
-        // Генерируем доску с бонусными символами 's'
-        // Нужно гарантировать 3-5 бонусных символов
-        $bonusCount = mt_rand(3, 5);
+        $bonusCount = mt_rand(3, 3);
         $board = str_repeat('x', 15); // Начинаем с пустой доски
 
         // Размещаем бонусные символы случайно

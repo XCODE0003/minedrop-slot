@@ -25,7 +25,7 @@ class WalletController extends Controller
 
         $playService = new PlayService($sessionGame, $amount);
         $multiplier = $request->multiplier;
-        $playService->setMultiplierSeed(230);
+        $playService->setMultiplierSeed($multiplier);
         // Если режим BONUS, запускаем бонусную игру
         if ($mode === 'BONUS') {
             $sessionGame->balance -= $amount;
