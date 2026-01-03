@@ -1,12 +1,8 @@
 <?php
-
 namespace App\Service\Game;
 
 use App\Models\Bet;
 use App\Models\SessionGame;
-use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 
 class PlayService
 {
@@ -67,229 +63,219 @@ class PlayService
         return $round;
     }
 
-    public function playBonus(): array
+    public function generateBonusRound($blocks, $board, $startIndex = 0, array &$hpState = [], float &$totalWinAccum = 0): array
     {
-        $seed = $this->generateSeed();
-        $state = [];
-        $stateIndex = 0;
+        $pickaxePhase = $this->mine($blocks, $board, $hpState);
 
-        $targetMultiplier = null;
-        if ($this->multiplierSeed !== null) {
-            $targetMultiplier = (float) $this->multiplierSeed;
-        }
-
-        // 1. Начальное состояние с seed
-        $state[] = [
-            'index' => $stateIndex++,
-            's' => $seed,
-            'type' => 's',
-        ];
-
-
-        $initialBoard = $this->generateBonusBoard();
-
-        $bonusPositions = [];
-        $boardRows = str_split($initialBoard, 3);
-        foreach ($boardRows as $reel => $row) {
-            $rowSymbols = str_split($row);
-            foreach ($rowSymbols as $rowIndex => $symbol) {
-                if ($symbol === 's') {
-                    $bonusPositions[] = [$reel, $rowIndex];
+        // Собираем сломанные блоки из pickaxePhase и считаем payout
+        $pickaxeBroken = [];
+        $roundWin = 0.0;
+        foreach ($pickaxePhase as $phase) {
+            if (isset($phase['brokenBlocks']) && is_array($phase['brokenBlocks'])) {
+                $pickaxeBroken = array_merge($pickaxeBroken, $phase['brokenBlocks']);
+            }
+            // Суммируем payout только от кирок, которые сломали блок
+            if (isset($phase['pickaxes']) && is_array($phase['pickaxes'])) {
+                foreach ($phase['pickaxes'] as $pickaxe) {
+                    if (isset($pickaxe['payout']) && !empty($pickaxe['is_broken'])) {
+                        $roundWin += (float) $pickaxe['payout'];
+                    }
                 }
             }
         }
 
-        $anticipation = count($bonusPositions);
-        $freeSpinCount = 5;
-
-        // Если задан множитель, перебираем варианты до получения нужного выигрыша
-        $maxAttempts = $targetMultiplier !== null ? 10000 : 1;
-        $attempt = 0;
-        $totalWin = 0.0;
-        $allSpinsData = [];
-        $finalBlocks = null;
-
-        while ($attempt < $maxAttempts) {
-            $totalWin = 0.0;
-            $allSpinsData = [];
-
-            $blocks = $this->generateBlocks($targetMultiplier);
-
-            $alreadyBroken = [];  // Массив индексов уже сломанных блоков
-            $blockHPState = [];   // Состояние HP блоков между раундами
-
-            // 5 раундов на одной карте блоков
-            for ($spin = 0; $spin < $freeSpinCount; $spin++) {
-                // Генерируем новые кирки (board) для каждого раунда
-                // Первый раунд использует initialBoard с бонусными символами
-                // Остальные раунды - кирки распределяются равномерно по оставшимся раундам
-                if ($spin === 0) {
-                    $currentBoard = $initialBoard;
-                } else {
-                    $currentBoard = $this->generateBonusBoardForRound($alreadyBroken, $spin, $freeSpinCount, $targetMultiplier);
-                }
-
-                // Используем bonus-версии функций с передачей состояния
-                $pickaxePhase = $this->bonusMine($blocks, $currentBoard, $alreadyBroken, $blockHPState);
-                $tntPhase = $this->bonusTnt($blocks, $currentBoard, $alreadyBroken, $blockHPState);
-                $spinWin = $this->calculateWin($pickaxePhase, $tntPhase);
-                $totalWin += $spinWin;
-
-                $allSpinsData[] = [
-                    'board' => $currentBoard,
-                    'blocks' => $blocks,
-                    'pickaxePhase' => $pickaxePhase,
-                    'tntPhase' => $tntPhase,
-                    'spinWin' => $spinWin,
-                    'alreadyBroken' => $alreadyBroken, // Сохраняем состояние для отладки
-                ];
+        // Обновляем blocks после pickaxePhase (заменяем сломанные на L)
+        $blocksArray = str_split($blocks);
+        foreach ($pickaxeBroken as $index) {
+            if (isset($blocksArray[$index])) {
+                $blocksArray[$index] = 'L';
             }
+        }
+        $blocksAfterPickaxe = implode('', $blocksArray);
 
-            // Для бонуски - выходим после первой попытки, множители добьём через сундуки
-            if ($targetMultiplier === null) {
-                break;
+        // Теперь вызываем tnt с обновленными блоками
+        $tntPhase = $this->tnt($blocksAfterPickaxe, $board, $pickaxePhase, $hpState);
+
+        // Собираем сломанные блоки из tntPhase и считаем payout
+        $tntBroken = [];
+        foreach ($tntPhase as $tnt) {
+            if (isset($tnt['brokenBlocks']) && is_array($tnt['brokenBlocks'])) {
+                $tntBroken = array_merge($tntBroken, $tnt['brokenBlocks']);
             }
-
-            // Если выигрыш достаточен - выходим
-            if ($totalWin >= $targetMultiplier || abs($totalWin - $targetMultiplier) < 0.01) {
-                break;
+            // Суммируем payout от TNT
+            if (isset($tnt['payout'])) {
+                $roundWin += (float) $tnt['payout'];
             }
-
-            $attempt++;
         }
 
-        $multipliers = [];
-        $baseWinAmount = $totalWin;
-        $finalWinAmount = $totalWin;
-
-        if ($targetMultiplier !== null && $totalWin > 0 && $totalWin < $targetMultiplier) {
-            // Нужный общий множитель от сундуков
-            $requiredMultiplier = $targetMultiplier / $totalWin;
-
-            // Генерируем массив множителей (сундуков)
-            $multipliers = $this->generateChestMultipliers($requiredMultiplier);
-
-            // Итоговый выигрыш = baseWin * сумма множителей
-            $multiplierSum = array_sum($multipliers);
-            $finalWinAmount = $baseWinAmount * $multiplierSum;
-        } elseif ($targetMultiplier !== null && $totalWin == 0) {
-            // Если выигрыш 0, но нужен множитель - даём минимальный выигрыш
-            $baseWinAmount = 0.1;
-            $multipliers = $this->generateChestMultipliers($targetMultiplier / $baseWinAmount);
-            $finalWinAmount = $baseWinAmount * array_sum($multipliers);
+        // Обновляем blocks после tntPhase
+        $blocksArray = str_split($blocksAfterPickaxe);
+        foreach ($tntBroken as $index) {
+            if (isset($blocksArray[$index])) {
+                $blocksArray[$index] = 'L';
+            }
         }
+        $newBlocks = implode('', $blocksArray);
 
-        // Используем блоки из первого спина для reveal
-        $finalBlocks = $allSpinsData[0]['blocks'];
+        // Накапливаем общий выигрыш
+        $totalWinAccum += $roundWin;
 
-        // 3. Reveal с anticipation
-        $state[] = [
-            'index' => $stateIndex++,
-            'anticipation' => $anticipation,
-            'blocks' => $finalBlocks,
-            'board' => $initialBoard,
-            'type' => 'reveal',
-        ];
-
-        // 4. Bonus enter
-        $state[] = [
-            'index' => $stateIndex++,
-            'bonusType' => 'Bonus',
-            'freeSpinCount' => $freeSpinCount,
-            'positions' => $bonusPositions,
-            'type' => 'bonusEnter',
-        ];
-
-        // Формируем state из сохраненных данных
-        $currentTotalWin = 0.0;
-
-        // Первый спин
-        $spinData = $allSpinsData[0];
-        $currentTotalWin += $spinData['spinWin'];
-        $state[] = [
-            'index' => $stateIndex++,
-            'pickaxePhase' => $spinData['pickaxePhase'],
-            'tntPhase' => $spinData['tntPhase'],
+        $round = [];
+        $round[] = [
+            'index' => $startIndex,
+            'pickaxePhase' => $pickaxePhase,
+            'tntPhase' => $tntPhase,
             'type' => 'mine',
         ];
-
-        if ($spinData['spinWin'] > 0) {
-            $state[] = [
-                'index' => $stateIndex++,
-                'totalWin' => round($currentTotalWin, 2),
-                'type' => 'totalWin',
-            ];
-        }
-
-        // Free spins (раунды 2-5, индексы 1-4)
-        for ($spin = 1; $spin < $freeSpinCount; $spin++) {
-            $freeSpinsRemaining = $freeSpinCount - $spin - 1; // Осталось раундов после текущего
-            $spinData = $allSpinsData[$spin];
-
-            // Bonus reveal - новые кирки на той же карте
-            $state[] = [
-                'index' => $stateIndex++,
-                'anticipation' => 0,
-                'board' => $spinData['board'],
-                'freeSpinsRemaining' => $freeSpinsRemaining,
-                'type' => 'bonusReveal',
-            ];
-
-            // Mine phase
-            $state[] = [
-                'index' => $stateIndex++,
-                'pickaxePhase' => $spinData['pickaxePhase'],
-                'tntPhase' => $spinData['tntPhase'],
-                'type' => 'mine',
-            ];
-
-            $currentTotalWin += $spinData['spinWin'];
-
-            // Показываем totalWin после каждого раунда (даже если spinWin = 0)
-            $state[] = [
-                'index' => $stateIndex++,
-                'totalWin' => round($currentTotalWin, 2),
-                'type' => 'totalWin',
-            ];
-        }
-
-        // 8. Final win (с множителями из сундуков если нужно)
+        $round[] = [
+            'index' => $startIndex + 1,
+            'totalWin' => round($totalWinAccum, 1),
+            'type' => 'totalWin',
+        ];
+        $round['newBlocks'] = $newBlocks;
+        return $round;
+    }
+    public function getBonusState(): array
+    {
+        $blocks = 'ddcrgmdccrroddcrgodccrmodccrmo';
+        $board = 'xsxsxx55xs55x5x';
+        $state = [];
         $state[] = [
-            'index' => $stateIndex++,
-            'baseWinAmount' => round($baseWinAmount, 2),
-            'finalWin' => round($finalWinAmount, 2),
-            'multipliers' => $multipliers,
+            'index' => 0,
+            's' => $this->generateSeed(),
+            'type' => 's',
+        ];
+        $state[] = [
+            'anticipation' => 2,
+            'blocks' => $blocks,
+            'board' => $board,
+            'index' => 1,
+            'type' => 'reveal',
+        ];
+        $state[] = [
+            'bonusType' => 'Bonus',
+            'freeSpinCount' => 5,
+            'index' => 2,
+            'positions' => [
+                [
+                    0,
+                    1,
+                ],
+                [
+                    1,
+                    0,
+                ],
+                [
+                    3,
+                    0,
+                ],
+            ],
+            'type' => 'bonusEnter',
+        ];
+        $hpState = []; // Состояние HP блоков между раундами
+        $totalWin = 0.0; // Накопленный выигрыш (множитель)
+        $round = $this->generateBonusRound($blocks, 'xsxsxx55xs55x5x', 3, $hpState, $totalWin);
+        $blocks = $round['newBlocks']; // Обновляем блоки с L для следующего раунда
+        unset($round['newBlocks']); // Удаляем из массива, чтобы не попало в state
+        foreach ($round as $item) {
+            $state[] = $item;
+        }
+
+        $state[] = [
+            'anticipation' => 0,
+            'board' => '554xx4x435x52xx',
+            'freeSpinsRemaining' => 3,
+            'index' => 5,
+            'type' => 'bonusReveal',
+        ];
+        $round = $this->generateBonusRound($blocks, '554xx4x435x52xx', 6, $hpState, $totalWin);
+        $blocks = $round['newBlocks']; // Обновляем блоки с L для следующего раунда
+        unset($round['newBlocks']); // Удаляем из массива, чтобы не попало в state
+        foreach ($round as $item) {
+            $state[] = $item;
+        }
+        $state[] = [
+            'anticipation' => 0,
+            'board' => 'xxxx1xxx4xx545x',
+            'freeSpinsRemaining' => 2,
+            'index' => 8,
+            'type' => 'bonusReveal',
+        ];
+        $round = $this->generateBonusRound($blocks, 'xxxx1xxx4xx545x', 9, $hpState, $totalWin);
+        $blocks = $round['newBlocks']; // Обновляем блоки с L для следующего раунда
+        unset($round['newBlocks']); // Удаляем из массива, чтобы не попало в state
+        foreach ($round as $item) {
+            $state[] = $item;
+        }
+        $state[] = [
+            'anticipation' => 0,
+            'board' => 'xx53x5xx5x4x5xx',
+            'freeSpinsRemaining' => 1,
+            'index' => 12,
+            'type' => 'bonusReveal',
+        ];
+        $round = $this->generateBonusRound($blocks, 'xx53x5xx5x4x5xx', 13, $hpState, $totalWin);
+        $blocks = $round['newBlocks']; // Обновляем блоки с L для следующего раунда
+        unset($round['newBlocks']); // Удаляем из массива, чтобы не попало в state
+        foreach ($round as $item) {
+            $state[] = $item;
+        }
+        $state[] = [
+            'anticipation' => 0,
+            'board' => 'xxxxxxxx5xx5x55',
+            'freeSpinsRemaining' => 0,
+            'index' => 15,
+            'type' => 'bonusReveal',
+        ];
+        $round = $this->generateBonusRound($blocks, 'xxxxxxxx5xx5x55', 16, $hpState, $totalWin);
+        $blocks = $round['newBlocks']; // Обновляем блоки с L для следующего раунда
+        unset($round['newBlocks']); // Удаляем из массива, чтобы не попало в state
+        foreach ($round as $item) {
+            $state[] = $item;
+        }
+
+        $state[] = [
+            'baseWinAmount' => $totalWin,
+            'finalWin' => $totalWin,
+            'index' => 19,
+            'multipliers' => [],
             'type' => 'finalWin',
         ];
-
-        // 9. Bonus exit
         $state[] = [
-            'index' => $stateIndex++,
-            'totalSpins' => $freeSpinCount,
-            'totalWin' => round($finalWinAmount, 2),
+            'index' => 20,
+            'totalSpins' => 5,
+            'totalWin' => $totalWin,
             'type' => 'bonusExit',
         ];
+        return $state;
 
-        // Обновляем баланс с выигрышем (с учётом множителей)
-        $this->session->balance += (int) round($this->bet * $finalWinAmount);
-        $this->session->save();
+    }
+    public function getBonusRound(): array
+    {
+        $array =
+            [
+                'balance' => [
+                    'amount' => 1480000000,
+                    'currency' => 'USD',
+                ],
+                'round' => [
+                    'betID' => 3267508054,
+                    'amount' => 1000000,
+                    'payout' => 2800000,
+                    'payoutMultiplier' => 2.8,
+                    'active' => true,
+                    'state' => $this->getBonusState(),
+                    'mode' => 'BONUS',
+                    'event' => null,
+                ],
+            ];
+        return $array;
+    }
+    public function playBonus(): array
+    {
 
-        return [
-            'balance' => [
-                'amount' => $this->session->balance,
-                'currency' => 'RUB',
-            ],
-            'round' => [
-                'betID' => $seed,
-                'amount' => $this->bet,
-                'payout' => (int) round($this->bet * $finalWinAmount),
-                'payoutMultiplier' => round($finalWinAmount, 2),
-                'active' => $finalWinAmount > 0,
-                'state' => $state,
-                'mode' => 'BONUS',
-                'event' => null,
-            ],
-        ];
+        return $this->getBonusRound();
+
     }
 
     /**
@@ -473,61 +459,7 @@ class PlayService
         return $round;
     }
 
-    private function pickaxePhase()
-    {
-        return [
-            [
-                'brokenBlocks' => [
-                    0,
-                    1
-                ],
-                'pickaxes' => [
-                    [
-                        'breakBlock' => 1,
-                        'payout' => 0,
-                        'row' => 1,
-                        'symbol' => '4'
-                    ]
-                ],
-                'reel' => 0
-            ],
-            [
-                'brokenBlocks' => [
-                    12,
-                    13
-                ],
-                'pickaxes' => [
-                    [
-                        'breakBlock' => 12,
-                        'payout' => 0,
-                        'row' => 0,
-                        'symbol' => '5'
-                    ],
-                    [
-                        'breakBlock' => 13,
-                        'payout' => 0,
-                        'row' => 1,
-                        'symbol' => '5'
-                    ]
-                ],
-                'reel' => 2
-            ],
-            [
-                'brokenBlocks' => [
-                    24
-                ],
-                'pickaxes' => [
-                    [
-                        'breakBlock' => 25,
-                        'payout' => 0,
-                        'row' => 0,
-                        'symbol' => '4'
-                    ]
-                ],
-                'reel' => 4
-            ]
-        ];
-    }
+
     private function calculateWin(array $pickaxePhase, array $tntPhase = []): float
     {
         $totalWin = 0.0;
@@ -537,7 +469,7 @@ class PlayService
                 continue;
             }
             foreach ($reel['pickaxes'] as $pickaxe) {
-                if (isset($pickaxe['payout'])) {
+                if (isset($pickaxe['payout']) && !empty($pickaxe['is_broken'])) {
                     $totalWin += (float) $pickaxe['payout'];
                 }
             }
@@ -573,12 +505,12 @@ class PlayService
             for ($i = 0; $i < 15; $i++) {
                 // Подстраиваем веса: больше мощных кирок и TNT для больших множителей
                 $weights = [
-                    'x' => (int)(30 * (1 - $boostFactor)),
-                    '1' => (int)(10 * (1 + $boostFactor * 1.5)), // TNT
-                    '2' => (int)(15 * (1 + $boostFactor * 1.5)), // Мощная кирка (5 урона)
-                    '3' => (int)(15 * (1 + $boostFactor * 0.5)), // Кирка (3 урона)
-                    '4' => (int)(15 * (1 - $boostFactor * 0.3)), // Кирка (2 урона)
-                    '5' => (int)(10 * (1 - $boostFactor * 0.5)), // Кирка (1 урон)
+                    'x' => (int) (30 * (1 - $boostFactor)),
+                    '1' => (int) (10 * (1 + $boostFactor * 1.5)), // TNT
+                    '2' => (int) (15 * (1 + $boostFactor * 1.5)), // Мощная кирка (5 урона)
+                    '3' => (int) (15 * (1 + $boostFactor * 0.5)), // Кирка (3 урона)
+                    '4' => (int) (15 * (1 - $boostFactor * 0.3)), // Кирка (2 урона)
+                    '5' => (int) (10 * (1 - $boostFactor * 0.5)), // Кирка (1 урон)
                 ];
 
                 $board .= $this->weightedRandom($weights);
@@ -683,19 +615,19 @@ class PlayService
         // x - пусто, 1 - TNT, 2 - 5 урона, 3 - 3 урона, 4 - 2 урона, 5 - 1 урон
 
         // Чем выше strength, тем меньше пустых и слабых, больше сильных
-        $emptyWeight = (int)(40 * (1 - $strength));      // 40 -> 8 при strength 0.8
-        $tntWeight = (int)(5 + 10 * $strength);          // 5 -> 13
-        $strongWeight = (int)(5 + 15 * $strength);       // 5 -> 17 (5 урона)
-        $mediumWeight = (int)(10 + 10 * $strength);      // 10 -> 18 (3 урона)
-        $weakWeight = (int)(15 * (1 - $strength * 0.5)); // 15 -> 9 (2 урона)
-        $veryWeakWeight = (int)(10 * (1 - $strength));   // 10 -> 2 (1 урон)
+        $emptyWeight = (int) (40 * (1 - $strength));       // 40 -> 8 при strength 0.8
+        $tntWeight = (int) (5 + 10 * $strength);         // 5 -> 13
+        $strongWeight = (int) (5 + 15 * $strength);         // 5 -> 17 (5 урона)
+        $mediumWeight = (int) (10 + 10 * $strength);        // 10 -> 18 (3 урона)
+        $weakWeight = (int) (15 * (1 - $strength * 0.5)); // 15 -> 9 (2 урона)
+        $veryWeakWeight = (int) (10 * (1 - $strength));       // 10 -> 2 (1 урон)
 
         // Если есть целевой множитель, корректируем
         if ($targetMultiplier !== null && $targetMultiplier > 20) {
             $boostFactor = min(($targetMultiplier / 150), 0.5);
-            $emptyWeight = (int)($emptyWeight * (1 - $boostFactor));
-            $tntWeight = (int)($tntWeight * (1 + $boostFactor));
-            $strongWeight = (int)($strongWeight * (1 + $boostFactor));
+            $emptyWeight = (int) ($emptyWeight * (1 - $boostFactor));
+            $tntWeight = (int) ($tntWeight * (1 + $boostFactor));
+            $strongWeight = (int) ($strongWeight * (1 + $boostFactor));
         }
 
         $weights = [
@@ -739,8 +671,9 @@ class PlayService
         return $board;
     }
 
-    private function mine(string $blocks, string $board): array
+    private function mine(string $blocks, string $board, array &$hpState = []): array
     {
+
         if (strlen($blocks) !== 30 || strlen($board) !== 15) {
             return [];
         }
@@ -776,14 +709,25 @@ class PlayService
                 return $a['damage'] <=> $b['damage'];
             });
 
-            $currentIndex = 0;       // накопительное разрушение слева направо
+            $currentIndex = 0; // накопительное разрушение слева направо
             $allBroken = [];
             $pickaxesOut = [];
 
             // Track remaining HP for each block (cumulative damage)
             $blockHPRemaining = [];
 
+            // Помечаем блоки L как уже сломанные (HP = 0), но НЕ добавляем в brokenBlocks
+            // т.к. они были сломаны в предыдущих раундах
+            foreach ($rowBlocks as $idx => $block) {
+                if ($block === 'L') {
+                    $blockHPRemaining[$idx] = 0;
+                }
+            }
+
             foreach ($pickaxes as $pickaxe) {
+                if($pickaxe['symbol'] === 's') {
+                    continue;
+                }
                 $damage = $pickaxe['damage'];
 
                 $localBroken = [];
@@ -791,18 +735,32 @@ class PlayService
                 $is_broken = false;
                 $lastBlock = null;
                 $lastHP = null;
-                $lastBlockIndex = null; // Track the last block index that was hit
+                $lastBlockIndex = null;
 
                 while ($currentIndex < 6 && $damage > 0) {
                     $block = $rowBlocks[$currentIndex];
+
+                    // Пропускаем блоки L (уже сломанные) - они уже добавлены в allBroken
+                    if ($block === 'L') {
+                        $currentIndex++;
+                        continue;
+                    }
+
                     $baseHP = $this->blockHP[$block] ?? null;
                     if ($baseHP === null) {
                         break;
                     }
 
-                    // Get remaining HP for this block (accounting for previous damage)
+                    $globalIndex = $reel * 6 + $currentIndex;
+
+                    // Get remaining HP for this block (accounting for previous damage from hpState or current round)
                     if (!isset($blockHPRemaining[$currentIndex])) {
-                        $blockHPRemaining[$currentIndex] = $baseHP;
+                        // Сначала проверяем сохраненное состояние HP между раундами
+                        if (isset($hpState[$globalIndex])) {
+                            $blockHPRemaining[$currentIndex] = $hpState[$globalIndex];
+                        } else {
+                            $blockHPRemaining[$currentIndex] = $baseHP;
+                        }
                     }
                     $hp = $blockHPRemaining[$currentIndex];
 
@@ -812,12 +770,11 @@ class PlayService
                         continue;
                     }
 
-                    $globalIndex = $reel * 6 + $currentIndex;
-
                     // Deal 1 damage per hit
                     $hp--;
                     $damage--;
                     $blockHPRemaining[$currentIndex] = $hp;
+                    $hpState[$globalIndex] = $hp; // Сохраняем HP для следующих раундов
 
                     // Track the last block that was hit
                     $lastBlockIndex = $globalIndex;
@@ -1096,25 +1053,36 @@ class PlayService
                 $neighbors = [];
 
                 // тот же столбец (вверх/вниз от landingDepth)
-                if ($landingDepth > 0)
+                if ($landingDepth > 0) {
                     $neighbors[] = $reel * 6 + ($landingDepth - 1);
-                if ($landingDepth < 5)
+                }
+
+                if ($landingDepth < 5) {
                     $neighbors[] = $reel * 6 + ($landingDepth + 1);
+                }
 
                 // соседние столбцы
                 if ($reel > 0) {
-                    if ($landingDepth > 0)
+                    if ($landingDepth > 0) {
                         $neighbors[] = ($reel - 1) * 6 + ($landingDepth - 1);
+                    }
+
                     $neighbors[] = ($reel - 1) * 6 + $landingDepth;
-                    if ($landingDepth < 5)
+                    if ($landingDepth < 5) {
                         $neighbors[] = ($reel - 1) * 6 + ($landingDepth + 1);
+                    }
+
                 }
                 if ($reel < 4) {
-                    if ($landingDepth > 0)
+                    if ($landingDepth > 0) {
                         $neighbors[] = ($reel + 1) * 6 + ($landingDepth - 1);
+                    }
+
                     $neighbors[] = ($reel + 1) * 6 + $landingDepth;
-                    if ($landingDepth < 5)
+                    if ($landingDepth < 5) {
                         $neighbors[] = ($reel + 1) * 6 + ($landingDepth + 1);
+                    }
+
                 }
 
                 $brokenBlocks = [];
@@ -1180,7 +1148,7 @@ class PlayService
         return $tntPhase;
     }
 
-    private function tnt(string $blocks, string $board, array $pickaxePhase): array
+    private function tnt(string $blocks, string $board, array $pickaxePhase, array &$hpState = []): array
     {
         if (strlen($blocks) !== 30 || strlen($board) !== 15) {
             return [];
@@ -1189,60 +1157,23 @@ class PlayService
         $blockRows = str_split($blocks, 6);
         $boardRows = str_split($board, 3);
 
-        // 1) Посчитать оставшееся HP после кирок (симуляция той же логики)
+        // Используем hpState напрямую (он уже содержит HP после mine())
+        // Для блоков, которых нет в hpState, инициализируем из blockHP
         $blockHPRemaining = [];
         for ($i = 0; $i < 30; $i++) {
             $blockType = $blocks[$i] ?? null;
-            if ($blockType !== null && isset($this->blockHP[$blockType])) {
-                $blockHPRemaining[$i] = $this->blockHP[$blockType];
-            }
-        }
 
-        foreach ($blockRows as $reel => $row) {
-            $rowBlocks = str_split($row);
-            $boardRow = str_split($boardRows[$reel]);
-            $pickaxes = [];
-            foreach ($boardRow as $col => $symbol) {
-                if ($symbol !== 'x' && isset($this->pickaxeHits[$symbol])) {
-                    $pickaxes[] = [
-                        'symbol' => $symbol,
-                        'damage' => $this->pickaxeHits[$symbol],
-                        'col' => $col,
-                    ];
-                }
-            }
-            if (!$pickaxes) {
+            // Блоки L уже сломаны
+            if ($blockType === 'L') {
+                $blockHPRemaining[$i] = 0;
                 continue;
             }
-            usort($pickaxes, function ($a, $b) {
-                return $a['damage'] === $b['damage']
-                    ? ($a['col'] <=> $b['col'])
-                    : ($a['damage'] <=> $b['damage']);
-            });
 
-            $currentIndex = 0;
-            foreach ($pickaxes as $pickaxe) {
-                $damage = $pickaxe['damage'];
-                while ($currentIndex < 6 && $damage > 0) {
-                    $globalIndex = $reel * 6 + $currentIndex;
-                    if (!isset($blockHPRemaining[$globalIndex])) {
-                        break;
-                    }
-                    $hp = $blockHPRemaining[$globalIndex];
-                    if ($hp <= 0) {
-                        $currentIndex++;
-                        continue;
-                    }
-                    // 1 урон за удар
-                    $hp--;
-                    $damage--;
-                    $blockHPRemaining[$globalIndex] = $hp;
-
-                    // переход к следующему блоку только если сломан и урон остался
-                    if ($hp <= 0 && $damage > 0) {
-                        $currentIndex++;
-                    }
-                }
+            // Используем сохраненное состояние HP из hpState
+            if (isset($hpState[$i])) {
+                $blockHPRemaining[$i] = $hpState[$i];
+            } elseif ($blockType !== null && isset($this->blockHP[$blockType])) {
+                $blockHPRemaining[$i] = $this->blockHP[$blockType];
             }
         }
 
@@ -1272,25 +1203,36 @@ class PlayService
                 $neighbors = [];
 
                 // тот же столбец (вверх/вниз от landingDepth)
-                if ($landingDepth > 0)
+                if ($landingDepth > 0) {
                     $neighbors[] = $reel * 6 + ($landingDepth - 1);
-                if ($landingDepth < 5)
+                }
+
+                if ($landingDepth < 5) {
                     $neighbors[] = $reel * 6 + ($landingDepth + 1);
+                }
 
                 // соседние столбцы (диагонали + вертикаль) от landingDepth
                 if ($reel > 0) {
-                    if ($landingDepth > 0)
+                    if ($landingDepth > 0) {
                         $neighbors[] = ($reel - 1) * 6 + ($landingDepth - 1);
+                    }
+
                     $neighbors[] = ($reel - 1) * 6 + $landingDepth;
-                    if ($landingDepth < 5)
+                    if ($landingDepth < 5) {
                         $neighbors[] = ($reel - 1) * 6 + ($landingDepth + 1);
+                    }
+
                 }
                 if ($reel < 4) {
-                    if ($landingDepth > 0)
+                    if ($landingDepth > 0) {
                         $neighbors[] = ($reel + 1) * 6 + ($landingDepth - 1);
+                    }
+
                     $neighbors[] = ($reel + 1) * 6 + $landingDepth;
-                    if ($landingDepth < 5)
+                    if ($landingDepth < 5) {
                         $neighbors[] = ($reel + 1) * 6 + ($landingDepth + 1);
+                    }
+
                 }
 
                 $brokenBlocks = [];
@@ -1328,7 +1270,6 @@ class PlayService
                     }
                 }
 
-
                 if ($didDamage) {
                     sort($brokenBlocks);
                     $tntPhase[] = [
@@ -1344,10 +1285,6 @@ class PlayService
 
         return $tntPhase;
     }
-
-
-
-
 
     private function generateSeed(): string
     {
@@ -1378,8 +1315,8 @@ class PlayService
                     case 1: // 2 ряд — земля, редко камень
                         if ($boostFactor > 0) {
                             $block = $this->weightedRandom([
-                                'd' => (int)(80 * (1 - $boostFactor * 0.3)),
-                                'c' => (int)(20 * (1 + $boostFactor)),
+                                'd' => (int) (80 * (1 - $boostFactor * 0.3)),
+                                'c' => (int) (20 * (1 + $boostFactor)),
                             ]);
                         } else {
                             $block = $this->weightedRandom([
@@ -1392,9 +1329,9 @@ class PlayService
                     case 2: // 3 ряд — иногда земля, чаще камень или руда
                         if ($boostFactor > 0) {
                             $block = $this->weightedRandom([
-                                'd' => (int)(20 * (1 - $boostFactor)),
-                                'c' => (int)(50 * (1 - $boostFactor * 0.2)),
-                                'r' => (int)(30 * (1 + $boostFactor * 1.5)),
+                                'd' => (int) (20 * (1 - $boostFactor)),
+                                'c' => (int) (50 * (1 - $boostFactor * 0.2)),
+                                'r' => (int) (30 * (1 + $boostFactor * 1.5)),
                             ]);
                         } else {
                             $block = $this->weightedRandom([
@@ -1408,8 +1345,8 @@ class PlayService
                     case 3: // 4 ряд — камень или руда
                         if ($boostFactor > 0) {
                             $block = $this->weightedRandom([
-                                'c' => (int)(60 * (1 - $boostFactor * 0.3)),
-                                'r' => (int)(40 * (1 + $boostFactor * 1.2)),
+                                'c' => (int) (60 * (1 - $boostFactor * 0.3)),
+                                'r' => (int) (40 * (1 + $boostFactor * 1.2)),
                             ]);
                         } else {
                             $block = $this->weightedRandom([
@@ -1422,9 +1359,9 @@ class PlayService
                     case 4: // 5 ряд — руда / золото / алмаз
                         if ($boostFactor > 0) {
                             $block = $this->weightedRandom([
-                                'r' => (int)(40 * (1 - $boostFactor * 0.5)),
-                                'g' => (int)(40 * (1 + $boostFactor * 0.8)),
-                                'm' => (int)(20 * (1 + $boostFactor * 2)),
+                                'r' => (int) (40 * (1 - $boostFactor * 0.5)),
+                                'g' => (int) (40 * (1 + $boostFactor * 0.8)),
+                                'm' => (int) (20 * (1 + $boostFactor * 2)),
                             ]);
                         } else {
                             $block = $this->weightedRandom([
@@ -1438,8 +1375,8 @@ class PlayService
                     case 5: // 6 ряд — алмаз / обсидиан
                         if ($boostFactor > 0) {
                             $block = $this->weightedRandom([
-                                'm' => (int)(60 * (1 - $boostFactor * 0.3)),
-                                'o' => (int)(40 * (1 + $boostFactor * 1.5)),
+                                'm' => (int) (60 * (1 - $boostFactor * 0.3)),
+                                'o' => (int) (40 * (1 + $boostFactor * 1.5)),
                             ]);
                         } else {
                             $block = $this->weightedRandom([
@@ -1472,7 +1409,4 @@ class PlayService
         return array_key_first($weights);
     }
 
-
-
 }
-
