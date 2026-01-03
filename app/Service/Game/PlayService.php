@@ -133,12 +133,13 @@ class PlayService
             'type' => 'totalWin',
         ];
         $round['newBlocks'] = $newBlocks;
+        ray($round,$totalWinAccum);
         return $round;
     }
     public function getBonusState(): array
     {
-        $blocks = 'ddcrgmdccrroddcrgodccrmodccrmo';
-        $board = 'xsxsxx55xs55x5x';
+        $blocks = 'dccrmmdccrgoddcrmodccrggdccrgo';
+        $board = '5xxxsxx5s4xx4xs';
         $state = [];
         $state[] = [
             'index' => 0,
@@ -174,7 +175,7 @@ class PlayService
         ];
         $hpState = []; // Состояние HP блоков между раундами
         $totalWin = 0.0; // Накопленный выигрыш (множитель)
-        $round = $this->generateBonusRound($blocks, 'xsxsxx55xs55x5x', 3, $hpState, $totalWin);
+        $round = $this->generateBonusRound($blocks, '5xxxsxx5s4xx4xs', 3, $hpState, $totalWin);
         $blocks = $round['newBlocks']; // Обновляем блоки с L для следующего раунда
         unset($round['newBlocks']); // Удаляем из массива, чтобы не попало в state
         foreach ($round as $item) {
@@ -183,12 +184,12 @@ class PlayService
 
         $state[] = [
             'anticipation' => 0,
-            'board' => '554xx4x435x52xx',
+            'board' => 'xxxxxx55555xx55',
             'freeSpinsRemaining' => 3,
             'index' => 5,
             'type' => 'bonusReveal',
         ];
-        $round = $this->generateBonusRound($blocks, '554xx4x435x52xx', 6, $hpState, $totalWin);
+        $round = $this->generateBonusRound($blocks, 'xxxxxx55555xx55', 6, $hpState, $totalWin);
         $blocks = $round['newBlocks']; // Обновляем блоки с L для следующего раунда
         unset($round['newBlocks']); // Удаляем из массива, чтобы не попало в state
         foreach ($round as $item) {
@@ -196,12 +197,12 @@ class PlayService
         }
         $state[] = [
             'anticipation' => 0,
-            'board' => 'xxxx1xxx4xx545x',
+            'board' => '5xxx4xxxx5xxx4x',
             'freeSpinsRemaining' => 2,
             'index' => 8,
             'type' => 'bonusReveal',
         ];
-        $round = $this->generateBonusRound($blocks, 'xxxx1xxx4xx545x', 9, $hpState, $totalWin);
+        $round = $this->generateBonusRound($blocks, '5xxx4xxxx5xxx4x', 9, $hpState, $totalWin);
         $blocks = $round['newBlocks']; // Обновляем блоки с L для следующего раунда
         unset($round['newBlocks']); // Удаляем из массива, чтобы не попало в state
         foreach ($round as $item) {
@@ -209,12 +210,12 @@ class PlayService
         }
         $state[] = [
             'anticipation' => 0,
-            'board' => 'xx53x5xx5x4x5xx',
+            'board' => 'x5555xxx5xx55xx',
             'freeSpinsRemaining' => 1,
             'index' => 12,
             'type' => 'bonusReveal',
         ];
-        $round = $this->generateBonusRound($blocks, 'xx53x5xx5x4x5xx', 13, $hpState, $totalWin);
+        $round = $this->generateBonusRound($blocks, 'x5555xxx5xx55xx', 13, $hpState, $totalWin);
         $blocks = $round['newBlocks']; // Обновляем блоки с L для следующего раунда
         unset($round['newBlocks']); // Удаляем из массива, чтобы не попало в state
         foreach ($round as $item) {
@@ -222,12 +223,12 @@ class PlayService
         }
         $state[] = [
             'anticipation' => 0,
-            'board' => 'xxxxxxxx5xx5x55',
+            'board' => 'xxx55xxx5xx53xx',
             'freeSpinsRemaining' => 0,
             'index' => 15,
             'type' => 'bonusReveal',
         ];
-        $round = $this->generateBonusRound($blocks, 'xxxxxxxx5xx5x55', 16, $hpState, $totalWin);
+        $round = $this->generateBonusRound($blocks, 'xxx55xxx5xx53xx', 16, $hpState, $totalWin);
         $blocks = $round['newBlocks']; // Обновляем блоки с L для следующего раунда
         unset($round['newBlocks']); // Удаляем из массива, чтобы не попало в state
         foreach ($round as $item) {
@@ -262,7 +263,7 @@ class PlayService
                     'betID' => 3267508054,
                     'amount' => 1000000,
                     'payout' => 2800000,
-                    'payoutMultiplier' => 2.8,
+                    'payoutMultiplier' => 1.8,
                     'active' => true,
                     'state' => $this->getBonusState(),
                     'mode' => 'BONUS',
