@@ -30,7 +30,7 @@ class WalletController extends Controller
         if ($mode === 'BONUS') {
             $sessionGame->balance -= $amount * 100;
             $sessionGame->save();
-            return $playService->playBonus(2);
+            return $playService->playBonus($multiplier);
         }
 
 
