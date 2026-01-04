@@ -215,50 +215,119 @@ class PlayService
             }
         }
 
-        // === ВАРИАНТ 3: Несколько сундуков (2 сундука) ===
-        // Комбинации: 2+2=4, 2+3=6, 2+5=10, 3+3=9, 2+2+2=8 и т.д.
+        // === ВАРИАНТ 3: Несколько сундуков ===
+        // Для красивой игры - предпочитаем несколько маленьких множителей
         $multiChestCombos = [
+            // 2 сундука
             [2, 2],      // x4
             [2, 3],      // x6
             [3, 3],      // x9
             [2, 5],      // x10
+            [2, 6],      // x12
+            [3, 5],      // x15
+            [2, 10],     // x20
+            [3, 6],      // x18
+            [5, 5],      // x25
+            [3, 10],     // x30
+            [5, 6],      // x30
+            [5, 10],     // x50
+            [6, 10],     // x60
+            [10, 10],    // x100
+            // 3 сундука
             [2, 2, 2],   // x8
             [2, 2, 3],   // x12
+            [2, 3, 3],   // x18
+            [2, 2, 5],   // x20
+            [3, 3, 3],   // x27
+            [2, 3, 5],   // x30
+            [2, 2, 10],  // x40
+            [3, 3, 5],   // x45
+            [2, 5, 5],   // x50
+            [3, 3, 6],   // x54
+            [2, 5, 6],   // x60
+            [3, 5, 5],   // x75
+            [2, 5, 10],  // x100
+            [5, 5, 5],   // x125
+            [3, 5, 10],  // x150
+            [5, 5, 6],   // x150
+            [5, 5, 10],  // x250
+            [5, 6, 10],  // x300
+            [6, 6, 10],  // x360
+            [5, 10, 10], // x500
+            [6, 10, 10], // x600
+            [10, 10, 10],// x1000
         ];
+
+        // Генерируем ВСЕ возможные комбинации рядов для каждой комбинации множителей
+        $allReelCombos = [
+            2 => [[0,1], [0,2], [0,3], [0,4], [1,2], [1,3], [1,4], [2,3], [2,4], [3,4]],
+            3 => [[0,1,2], [0,1,3], [0,1,4], [0,2,3], [0,2,4], [0,3,4], [1,2,3], [1,2,4], [1,3,4], [2,3,4]],
+            4 => [[0,1,2,3], [0,1,2,4], [0,1,3,4], [0,2,3,4], [1,2,3,4]],
+            5 => [[0,1,2,3,4]],
+        ];
+
+        // Добавляем 4-х и 5-сундучные комбинации для очень больших целей
+        if ($target > 500) {
+            $multiChestCombos = array_merge($multiChestCombos, [
+                [2, 2, 2, 2],     // x16
+                [2, 2, 2, 3],     // x24
+                [2, 2, 3, 3],     // x36
+                [2, 3, 3, 3],     // x54
+                [3, 3, 3, 3],     // x81
+                [2, 2, 5, 5],     // x100
+                [2, 5, 5, 5],     // x250
+                [5, 5, 5, 5],     // x625
+                [2, 2, 2, 2, 2],  // x32
+                [2, 2, 2, 2, 3],  // x48
+                [2, 2, 2, 3, 3],  // x72
+                [2, 2, 3, 3, 3],  // x108
+                [2, 3, 3, 3, 3],  // x162
+                [3, 3, 3, 3, 3],  // x243
+            ]);
+        }
 
         foreach ($multiChestCombos as $combo) {
             $totalMult = array_product($combo);
             $neededBase = $target / $totalMult;
             $numChests = count($combo);
 
-            // Минимальный payout = сумма N самых дешёвых рядов
-            $sortedPayouts = $reelPayouts;
-            asort($sortedPayouts);
-            $cheapestReels = array_slice(array_keys($sortedPayouts), 0, $numChests);
-            $minBase = array_sum(array_slice(array_values($sortedPayouts), 0, $numChests));
+            // Получаем все комбинации рядов для этого количества сундуков
+            $reelCombos = $allReelCombos[$numChests] ?? [array_slice([0,1,2,3,4], 0, $numChests)];
 
-            if ($neededBase >= $minBase && $neededBase <= $maxPayoutWithAllChests) {
-                $candidates[] = [
-                    'basePayout' => $neededBase,
-                    'multiplier' => $totalMult,
-                    'chestReel' => $cheapestReels[0],
-                    'chestReels' => $cheapestReels,
-                    'chestMultipliers' => $combo,
-                    'error' => 0,
-                    'complexity' => $neededBase
-                ];
-            } elseif ($neededBase < $minBase && $neededBase > 0) {
-                $actualBase = $minBase;
-                $error = abs($actualBase * $totalMult - $target);
-                $candidates[] = [
-                    'basePayout' => $actualBase,
-                    'multiplier' => $totalMult,
-                    'chestReel' => $cheapestReels[0],
-                    'chestReels' => $cheapestReels,
-                    'chestMultipliers' => $combo,
-                    'error' => $error,
-                    'complexity' => $actualBase
-                ];
+            foreach ($reelCombos as $reelCombo) {
+                // Считаем минимальный payout для этой комбинации рядов
+                $minBase = 0;
+                foreach ($reelCombo as $r) {
+                    $minBase += $reelPayouts[$r];
+                }
+
+                if ($neededBase >= $minBase && $neededBase <= $maxPayoutWithAllChests) {
+                    $candidates[] = [
+                        'basePayout' => $neededBase,
+                        'multiplier' => $totalMult,
+                        'chestReel' => $reelCombo[0],
+                        'chestReels' => $reelCombo,
+                        'chestMultipliers' => $combo,
+                        'error' => 0,
+                        'complexity' => $neededBase,
+                        'numChests' => $numChests
+                    ];
+                } elseif ($neededBase < $minBase && $neededBase > 0) {
+                    $actualBase = $minBase;
+                    $error = abs($actualBase * $totalMult - $target);
+                    if ($error <= $target * 0.5) { // Только если ошибка разумная
+                        $candidates[] = [
+                            'basePayout' => $actualBase,
+                            'multiplier' => $totalMult,
+                            'chestReel' => $reelCombo[0],
+                            'chestReels' => $reelCombo,
+                            'chestMultipliers' => $combo,
+                            'error' => $error,
+                            'complexity' => $actualBase,
+                            'numChests' => $numChests
+                        ];
+                    }
+                }
             }
         }
 
@@ -275,38 +344,73 @@ class PlayService
             ];
         }
 
-        // Фильтруем кандидатов с минимальной ошибкой
-        $minError = min(array_column($candidates, 'error'));
-        $bestCandidates = array_filter($candidates, fn($c) => abs($c['error'] - $minError) < 0.1);
-        $bestCandidates = array_values($bestCandidates);
+        // Сортируем: минимальная ошибка
+        usort($candidates, fn($a, $b) => $a['error'] <=> $b['error']);
 
-        // Находим минимальный basePayout среди лучших
-        $minBase = min(array_column($bestCandidates, 'basePayout'));
+        // Берём кандидатов с минимальной ошибкой
+        $minError = $candidates[0]['error'];
+        $goodCandidates = array_filter($candidates, fn($c) => $c['error'] <= $minError + 1);
+        $goodCandidates = array_values($goodCandidates);
 
-        // Оставляем только кандидатов с оптимальным или близким basePayout (допуск 20%)
-        $optimalCandidates = array_filter($bestCandidates, fn($c) => $c['basePayout'] <= $minBase * 1.2);
-        $optimalCandidates = array_values($optimalCandidates);
-
-        // Группируем по рядам для рандомизации
-        $byReel = [];
-        foreach ($optimalCandidates as $c) {
-            $reel = $c['chestReel'];
-            if ($reel !== null && !isset($byReel[$reel])) {
-                $byReel[$reel] = $c;
+        // Для МАЛЕНЬКИХ целей (<=100) предпочитаем варианты без сундуков или x2
+        // Это даёт лучший контроль точности
+        if ($target <= 100) {
+            $simpleOptions = array_filter($goodCandidates, fn($c) => $c['multiplier'] <= 2);
+            if (!empty($simpleOptions)) {
+                $goodCandidates = array_values($simpleOptions);
             }
         }
 
-        // Если нет рядов с сундуками, вернём оптимальный кандидат
-        if (empty($byReel)) {
-            shuffle($optimalCandidates);
-            return $optimalCandidates[0];
+        // Для БОЛЬШИХ множителей (>100) предпочитаем несколько сундуков - это красивее
+        if ($target > 100) {
+            $multiChestCandidates = array_filter($goodCandidates, fn($c) => ($c['numChests'] ?? 1) >= 2);
+            if (!empty($multiChestCandidates)) {
+                // Предпочитаем 2-3 сундука с множителями 2-5 (не один большой x10)
+                $preferredCandidates = array_filter($multiChestCandidates, function($c) {
+                    $mults = $c['chestMultipliers'] ?? [];
+                    return !empty($mults) && max($mults) <= 5;
+                });
+
+                if (!empty($preferredCandidates)) {
+                    $goodCandidates = array_values($preferredCandidates);
+                } else {
+                    $goodCandidates = array_values($multiChestCandidates);
+                }
+            }
         }
 
-        // Выбираем случайный ряд из оптимальных
-        $reelOptions = array_values($byReel);
-        shuffle($reelOptions);
+        // Группируем по комбинации рядов для рандомизации
+        $byReelCombo = [];
+        foreach ($goodCandidates as $c) {
+            $key = implode(',', $c['chestReels'] ?? []);
+            if (!isset($byReelCombo[$key])) {
+                $byReelCombo[$key] = $c;
+            }
+        }
 
-        return $reelOptions[0];
+        $options = array_values($byReelCombo);
+        shuffle($options);
+
+        $selected = $options[0];
+
+        ray("Выбор плана:", [
+            'target' => $target,
+            'options' => count($options),
+            'allOptions' => array_map(fn($o) => [
+                'reels' => $o['chestReels'] ?? [],
+                'mults' => $o['chestMultipliers'] ?? [],
+                'base' => $o['basePayout'],
+                'err' => $o['error']
+            ], array_slice($options, 0, 5)),
+            'selected' => [
+                'reels' => $selected['chestReels'] ?? [],
+                'mults' => $selected['chestMultipliers'] ?? [],
+                'base' => $selected['basePayout'],
+                'error' => $selected['error']
+            ]
+        ]);
+
+        return $selected;
     }
 
     /**
@@ -380,7 +484,7 @@ class PlayService
             $targetReachedAtStart = ($currentPayout >= $targetBasePayout);
             $minReelsToProcess = 1; // Гарантируем минимум 1 ряд в каждом раунде
 
-            ray("Round $round: currentPayout=$currentPayout, targetBase=$targetBasePayout, needed=$payoutNeededThisRound");
+            ray("Round $round: currentPayout=$currentPayout, targetBase=$targetBasePayout, needed=$payoutNeededThisRound, chests=" . json_encode($chestsToOpen));
 
             // Для первого раунда добавляем бонусные символы
             if ($round === 0) {
@@ -409,8 +513,27 @@ class PlayService
             shuffle($otherReels); // Рандомизируем порядок для разнообразия
             $reelOrder = array_merge($reelOrder, $otherReels);
 
-            // Если target уже достигнут - добавляем визуальную активность в РАЗНЫЕ ряды
-            if ($currentPayout >= $targetBasePayout * 0.85) {
+            // Проверяем есть ли ещё несломанные сундучные ряды
+            $unbrokenChestReels = [];
+            foreach ($chestsToOpen as $chestReel) {
+                $startDepth = -1;
+                for ($d = 0; $d < 6; $d++) {
+                    $idx = $chestReel * 6 + $d;
+                    if ($hpState[$idx] > 0) {
+                        $startDepth = $d;
+                        break;
+                    }
+                }
+                if ($startDepth >= 0) {
+                    $unbrokenChestReels[] = $chestReel;
+                }
+            }
+
+            // Если есть несломанные сундучные ряды - обязательно ломаем их, игнорируя targetBasePayout
+            $mustBreakChests = !empty($unbrokenChestReels);
+
+            // Если target уже достигнут И все сундуки открыты - добавляем визуальную активность
+            if ($currentPayout >= $targetBasePayout * 0.98 && !$mustBreakChests) {
                 // Находим ряды с несломанными блоками
                 $activeReels = [];
                 for ($r = 0; $r < 5; $r++) {
@@ -450,11 +573,37 @@ class PlayService
                 continue; // Переходим к следующему раунду
             }
 
+            // === РАВНОМЕРНОЕ РАСПРЕДЕЛЕНИЕ КИРОК ПО РАУНДАМ ===
+            // Ограничиваем количество кирок за раунд для реалистичности
+            // Для больших целей нужно больше кирок
+            $basePickaxes = ($targetBasePayout > 50) ? 6 : 5;
+            $maxPickaxesPerRound = $basePickaxes + $round; // 5-6 в первом раунде, до 9-10 в последнем
+            $totalPickaxesThisRound = 0;
+
+            // Распределяем урон по нескольким рядам (2-4 ряда за раунд)
+            $reelsToProcessThisRound = count($chestsToOpen) > 1 ? min(4, count($reelOrder)) : min(3, count($reelOrder));
+
+            // Для сундучных рядов распределяем ломание равномерно
+            // Считаем сколько осталось раундов и сколько HP осталось в сундучных рядах
+            $remainingRounds = 5 - $round;
+
             // Для каждого ряда генерируем кирки
             foreach ($reelOrder as $reel) {
+                // Если достигли общей цели - стоп (кроме несломанных сундуков)
+                $reachedOverallTarget = ($currentPayout + $roundPayout) >= $targetBasePayout * 0.95;
+                $isChestReel = in_array($reel, $chestsToOpen);
 
-                // Проверяем достигли ли мы цели раунда
-                if ($reelsProcessed >= $minReelsToProcess && $roundPayout >= $payoutNeededThisRound) {
+                if ($reachedOverallTarget && !$isChestReel) {
+                    break;
+                }
+
+                // Ограничиваем количество рядов
+                if ($reelsProcessed >= $reelsToProcessThisRound && $reachedOverallTarget) {
+                    break;
+                }
+
+                // Ограничиваем общее количество кирок
+                if ($totalPickaxesThisRound >= $maxPickaxesPerRound) {
                     break;
                 }
 
@@ -469,22 +618,25 @@ class PlayService
                 }
 
                 if ($startDepth < 0) {
-                    continue; // Ряд сломан
+                    continue; // Ряд полностью сломан
                 }
 
                 // Проверяем запланирован ли сундук для этого ряда
                 $reelHasPlannedChest = in_array($reel, $chestsToOpen);
 
                 // Если мы уже у последнего блока (startDepth=5) - это сундук
+                // Открываем только если запланирован
                 if ($startDepth == 5) {
-                    // Открываем только если этот ряд запланирован
                     if (!$reelHasPlannedChest) {
-                        ray("Пропускаем сундук ряда $reel (не запланирован)");
                         continue;
                     }
                 }
 
-                // Сколько слотов доступно для кирок (не занятых 's')
+                // Если ряд не сундучный, ограничиваем depth до 5 (не открываем сундук)
+                // НО! Если мы ещё не достигли target, нужно ломать блоки из обычных рядов
+                $needMorePayout = ($currentPayout + $roundPayout) < $targetBasePayout * 0.95;
+
+                // Сколько слотов доступно для кирок
                 $boardStart = $reel * 3;
                 $availablePositions = [];
                 for ($col = 0; $col < 3; $col++) {
@@ -497,108 +649,111 @@ class PlayService
                     continue;
                 }
 
-                // Сколько ещё нужно payout в этом раунде?
-                $payoutStillNeeded = max(1, $payoutNeededThisRound - $roundPayout);
+                // Ограничиваем слоты исходя из оставшихся кирок
+                $maxSlotsThisReel = min(count($availablePositions), $maxPickaxesPerRound - $totalPickaxesThisRound);
+                if ($maxSlotsThisReel <= 0) {
+                    continue;
+                }
 
-                // Если это первый ряд раунда - ОБЯЗАТЕЛЬНО добавляем кирки
-                $forceMinDamage = ($reelsProcessed == 0);
+                // === РАВНОМЕРНОЕ РАСПРЕДЕЛЕНИЕ ДЛЯ СУНДУЧНЫХ РЯДОВ ===
+                $canOpenChest = in_array($reel, $chestsToOpen);
+                $maxDepth = $canOpenChest ? 6 : 5;
 
-                // Если target был достигнут - всё равно ломаем блоки (игра должна быть интересной)
-                // Но ограничиваем до 1 блока за раунд
-                $limitToOneBlock = $targetReachedAtStart;
+                // Считаем общий HP в этом ряду
+                $totalReelHP = 0;
+                for ($d = $startDepth; $d < $maxDepth; $d++) {
+                    $idx = $reel * 6 + $d;
+                    $totalReelHP += $hpState[$idx];
+                }
 
-                // Считаем сколько HP нужно сломать чтобы получить нужный payout
+                // Для сундучных рядов - распределяем HP равномерно по оставшимся раундам
+                if ($canOpenChest && $remainingRounds > 1) {
+                    // Сколько HP ломать в этом раунде (равномерно, но гарантируем прогресс)
+                    $hpPerRound = max(3, ceil($totalReelHP / $remainingRounds));
+                    // Но не больше чем можем с доступными слотами
+                    $hpPerRound = min($hpPerRound, $maxSlotsThisReel * 5);
+                } else {
+                    // Для последнего раунда или обычных рядов - ломаем всё оставшееся
+                    $hpPerRound = $totalReelHP;
+                }
+
                 $hpToBreak = 0;
                 $expectedPayout = 0;
-                $remainingToTarget = max(0, $targetBasePayout - $currentPayout);
 
-                // Определяем максимальную глубину для этого ряда
-                // Открываем сундук (depth=5) ТОЛЬКО если этот ряд в списке запланированных сундуков
-                $canOpenChest = in_array($reel, $chestsToOpen);
-                $maxDepth = $canOpenChest ? 6 : 5; // 6 = включая depth=5, 5 = до depth=4
+                // Сколько ещё нужно до target
+                $remainingToTarget = max(0, $targetBasePayout - $currentPayout - $roundPayout);
 
                 for ($d = $startDepth; $d < $maxDepth; $d++) {
                     $idx = $reel * 6 + $d;
+                    $blockHP = $hpState[$idx];
                     $blockPayout = $this->blockPayout[$blocksArray[$idx]] ?? 0;
 
-                    // Текущий projected total ПЕРЕД добавлением этого блока
-                    $currentProjected = $currentPayout + $roundPayout + $expectedPayout;
-                    // Projected total ПОСЛЕ добавления этого блока
-                    $projectedAfter = $currentProjected + $blockPayout;
-
-                    // Если это сундучный ряд - ломаем до конца несмотря ни на что
+                    // Для сундучных рядов - ломаем до лимита раунда
                     if ($canOpenChest) {
-                        $hpToBreak += $hpState[$idx];
-                        $expectedPayout += $blockPayout;
+                        if ($hpToBreak + $blockHP <= $hpPerRound || $hpToBreak == 0) {
+                            $hpToBreak += $blockHP;
+                            $expectedPayout += $blockPayout;
+                        } else {
+                            break;
+                        }
                         continue;
                     }
 
-                    // Если уже достигли target (даже без этого блока) - не ломаем больше
-                    // Допускаем небольшой недобор (95%) чтобы достичь target
-                    // Прерываем если это НЕ первый блок этого ряда ИЛИ уже обработали ряды в этом раунде
-                    $alreadyHasProgress = ($hpToBreak > 0 || $reelsProcessed > 0);
-                    if ($currentProjected >= $targetBasePayout * 0.95 && $alreadyHasProgress) {
+                    // Для обычных рядов - строго контролируем payout
+                    $currentProjected = $currentPayout + $roundPayout + $expectedPayout;
+
+                    // Если уже достигли target - полный стоп
+                    if ($currentProjected >= $targetBasePayout * 0.95) {
                         break;
                     }
 
-                    // Если этот блок сильно превысит target - не ломаем
+                    // Если этот блок превысит target - стоп
+                    $projectedAfter = $currentProjected + $blockPayout;
                     if ($projectedAfter > $targetBasePayout * 1.05 && $hpToBreak > 0) {
                         break;
                     }
 
-                    // Если достигли цели раунда - достаточно
-                    if ($expectedPayout >= $payoutStillNeeded) {
-                        break;
-                    }
-
-                    $hpToBreak += $hpState[$idx];
+                    // Добавляем блок
+                    $hpToBreak += $blockHP;
                     $expectedPayout += $blockPayout;
-
-                    // Если target уже достигнут на начало раунда, ломаем только 1 блок
-                    if ($targetReachedAtStart) {
-                        break;
-                    }
                 }
 
-                // Если форсируем минимум - добавляем хотя бы 1 блок
-                if ($forceMinDamage && $hpToBreak == 0) {
+                // Гарантируем минимум 1 блок в первом ряду раунда
+                if ($reelsProcessed == 0 && $hpToBreak == 0) {
                     $idx = $reel * 6 + $startDepth;
                     $hpToBreak = $hpState[$idx];
                 }
 
-                // Максимальный урон = количество слотов * 5 (алмазная кирка)
-                $maxDamageThisReel = count($availablePositions) * 5;
+                // Если нужно больше payout и есть несломанные блоки - гарантируем прогресс
+                if ($needMorePayout && $hpToBreak == 0 && $startDepth < 5) {
+                    $idx = $reel * 6 + $startDepth;
+                    $hpToBreak = $hpState[$idx];
+                }
 
-                // Сколько урона нанести (ограничено слотами и необходимостью)
+                if ($hpToBreak == 0) {
+                    continue;
+                }
+
+                // Максимальный урон с доступных слотов
+                $maxDamageThisReel = $maxSlotsThisReel * 5;
                 $damageThisRound = min($hpToBreak, $maxDamageThisReel);
 
-                // Если target уже достигнут - ломаем только 1 блок для прогресса
-                if ($limitToOneBlock) {
-                    // Находим HP первого несломанного блока
-                    $firstBlockHP = $hpState[$reel * 6 + $startDepth] ?? 1;
-                    $damageThisRound = $firstBlockHP; // Ровно на 1 блок
-                }
-
-                // Минимум 1 урон если форсируем
-                if ($forceMinDamage && $damageThisRound == 0) {
-                    $damageThisRound = 1;
-                }
-
-                // Подбираем кирки (ограничено количеством слотов)
+                // Подбираем кирки
                 $pickaxes = $this->selectPickaxesForDamage($damageThisRound);
-                while (count($pickaxes) > count($availablePositions)) {
+                while (count($pickaxes) > $maxSlotsThisReel) {
                     array_pop($pickaxes);
                 }
 
-                shuffle($availablePositions);
+                $totalPickaxesThisRound += count($pickaxes);
 
+                shuffle($availablePositions);
                 foreach ($pickaxes as $i => $pickaxe) {
                     if (isset($availablePositions[$i])) {
                         $board[$boardStart + $availablePositions[$i]] = $pickaxe;
                     }
                 }
 
-                // Симулируем урон для обновления hpState
+                // Симулируем урон
                 $pickaxeDamage = ['2' => 5, '3' => 3, '4' => 2, '5' => 1];
                 $totalDamage = 0;
                 foreach ($pickaxes as $p) {
@@ -628,6 +783,37 @@ class PlayService
 
             $boards[] = $board;
             ray("SIM Round $round: board=$board, basePayout=$currentPayout / $targetBasePayout");
+        }
+
+        // Если не достигли target после 5 раундов - добавляем ещё кирки в последний раунд
+        if ($currentPayout < $targetBasePayout * 0.90 && count($boards) == 5) {
+            ray("WARNING: Не достигли target! currentPayout=$currentPayout, target=$targetBasePayout. Добавляем кирки.");
+
+            // Находим несломанные ряды и добавляем кирки
+            $lastBoard = str_split($boards[4]);
+            for ($r = 0; $r < 5; $r++) {
+                if (in_array($r, $chestsToOpen)) continue; // Сундучные ряды уже обработаны
+
+                $startDepth = -1;
+                for ($d = 0; $d < 5; $d++) { // До depth=4, без сундука
+                    $idx = $r * 6 + $d;
+                    if ($hpState[$idx] > 0) {
+                        $startDepth = $d;
+                        break;
+                    }
+                }
+
+                if ($startDepth >= 0) {
+                    $boardStart = $r * 3;
+                    for ($col = 0; $col < 3; $col++) {
+                        if ($lastBoard[$boardStart + $col] === 'x') {
+                            $lastBoard[$boardStart + $col] = '3'; // Добавляем кирку
+                            break;
+                        }
+                    }
+                }
+            }
+            $boards[4] = implode('', $lastBoard);
         }
 
         ray("Сгенерировано boards: " . count($boards), "Итоговый payout: $currentPayout");
