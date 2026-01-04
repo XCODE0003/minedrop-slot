@@ -1289,13 +1289,13 @@ class PlayService
         // Если выпал бонус - генерируем бонусный раунд
         if ($isBonusTriggered) {
             // Определяем целевой множитель для бонуса
-            $bonusTargetMultiplier = $this->multiplierSeed !== null 
-                ? (float) $this->multiplierSeed 
+            $bonusTargetMultiplier = $this->multiplierSeed !== null
+                ? (float) $this->multiplierSeed
                 : $this->generateRandomBonusMultiplier();
-            
+
             // Генерируем умный бонусный раунд
             $bonusState = $this->generateSmartBonus($bonusTargetMultiplier);
-            
+
             // Получаем финальный выигрыш из бонуса
             $bonusFinalWin = 0.0;
             foreach ($bonusState as $item) {
@@ -1304,7 +1304,7 @@ class PlayService
                     break;
                 }
             }
-            
+
             return [
                 'balance' => [
                     'amount' => $this->session->balance,
@@ -1386,14 +1386,14 @@ class PlayService
     private function generateRandomBonusMultiplier(): float
     {
         $rand = mt_rand(1, 1000);
-        
+
         // Распределение вероятностей:
         // 50% - 10-30x (частые, небольшие выигрыши)
         // 30% - 30-80x (средние выигрыши)
         // 15% - 80-200x (хорошие выигрыши)
         // 4% - 200-500x (большие выигрыши)
         // 1% - 500-1000x (редкие, крупные выигрыши)
-        
+
         if ($rand <= 500) {
             return mt_rand(100, 300) / 10; // 10.0 - 30.0
         } elseif ($rand <= 800) {
