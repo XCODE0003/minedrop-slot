@@ -566,6 +566,18 @@ class PlayService
                             }
                         }
                     }
+                } else {
+                    // Все блоки сломаны - добавляем декоративные кирки в случайные позиции
+                    // Они будут анимированы, но ничего не сломают
+                    $allPositions = range(0, 14);
+                    shuffle($allPositions);
+                    $decorativeCount = min(3, count($allPositions));
+                    for ($i = 0; $i < $decorativeCount; $i++) {
+                        $pos = $allPositions[$i];
+                        if ($board[$pos] === 'x') {
+                            $board[$pos] = '5';
+                        }
+                    }
                 }
 
                 $boards[] = $board;
@@ -780,6 +792,19 @@ class PlayService
             }
 
             ray("Round $round finished: roundPayout=$roundPayout, totalPayout=$currentPayout, reelsProcessed=$reelsProcessed");
+
+            // Гарантируем что board не пустой - добавляем минимум 2 кирки если нет
+            $pickaxeCount = preg_match_all('/[2345]/', $board);
+            if ($pickaxeCount < 2) {
+                // Находим свободные позиции и добавляем декоративные кирки
+                for ($pos = 0; $pos < 15 && $pickaxeCount < 2; $pos++) {
+                    if ($board[$pos] === 'x') {
+                        $board[$pos] = '5';
+                        $pickaxeCount++;
+                    }
+                }
+                ray("Добавлены декоративные кирки: board=$board");
+            }
 
             $boards[] = $board;
             ray("SIM Round $round: board=$board, basePayout=$currentPayout / $targetBasePayout");
