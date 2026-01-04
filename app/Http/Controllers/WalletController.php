@@ -31,7 +31,7 @@ class WalletController extends Controller
             $sessionGame->balance -= $amount;
             $sessionGame->save();
 
-            return $playService->playBonus();
+            return $playService->playBonus(87);
         }
 
 

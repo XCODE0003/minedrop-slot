@@ -34,7 +34,7 @@ class PlayService
         '4' => 2, // железная
         '3' => 3, // золотая
         '2' => 5, // алмазная
-        's' => 1, // special (1 удар)
+        's' => 0, // special (1 удар)
     ];
 
     /**
@@ -65,6 +65,8 @@ class PlayService
 
     public function generateBonusRound($blocks, $board, $startIndex = 0, array &$hpState = [], float &$totalWinAccum = 0): array
     {
+        ray(">>> generateBonusRound index=$startIndex", "blocks: $blocks", "board: $board");
+
         $pickaxePhase = $this->mine($blocks, $board, $hpState);
 
         // Собираем сломанные блоки из pickaxePhase и считаем payout
@@ -79,6 +81,7 @@ class PlayService
                 foreach ($phase['pickaxes'] as $pickaxe) {
                     if (isset($pickaxe['payout']) && !empty($pickaxe['is_broken'])) {
                         $roundWin += (float) $pickaxe['payout'];
+                        ray("Pickaxe payout: {$pickaxe['payout']} (block: {$pickaxe['block']}, reel: {$phase['reel']})");
                     }
                 }
             }
@@ -133,9 +136,852 @@ class PlayService
             'type' => 'totalWin',
         ];
         $round['newBlocks'] = $newBlocks;
-        ray($round,$totalWinAccum);
+
+        ray("<<< generateBonusRound РЕЗУЛЬТАТ",
+            "roundWin: $roundWin",
+            "totalWinAccum: $totalWinAccum",
+            "brokenBlocks:", $pickaxeBroken,
+            "newBlocks: $newBlocks");
+
         return $round;
     }
+
+    /**
+     * Находит оптимальную комбинацию: базовый payout + множитель сундука
+     * Логика: target = basePayout * chestMultiplier
+     *
+     * Поддерживает несколько сундуков! Например: 2 сундука по x2 = x4
+     *
+     * КЛЮЧЕВОЙ ПРИНЦИП: минимизировать количество сломанных блоков!
+     */
+    private function findOptimalChestPlan(float $target, array $reelPayouts, array $multipliers): array
+    {
+        // Максимальный payout без сундуков (все блоки depth 0-4)
+        $maxPayoutNoChest = 24.5;
+        // Максимальный payout со всеми сундуками
+        $maxPayoutWithAllChests = array_sum($reelPayouts); // ~129.5
+
+        $candidates = [];
+
+        // === ВАРИАНТ 1: Без сундуков ===
+        if ($target <= $maxPayoutNoChest) {
+            $candidates[] = [
+                'basePayout' => $target,
+                'multiplier' => 1,
+                'chestReel' => null,
+                'chestReels' => [],
+                'chestMultipliers' => [],
+                'error' => 0,
+                'complexity' => $target
+            ];
+        }
+
+        // === ВАРИАНТ 2: Один сундук с разными множителями ===
+        foreach ($multipliers as $mult) {
+            if ($mult === 1) continue;
+
+            $neededBase = $target / $mult;
+
+            foreach ($reelPayouts as $reel => $reelPayout) {
+                if ($neededBase >= $reelPayout && $neededBase <= $maxPayoutWithAllChests) {
+                    $candidates[] = [
+                        'basePayout' => $neededBase,
+                        'multiplier' => $mult,
+                        'chestReel' => $reel,
+                        'chestReels' => [$reel],
+                        'chestMultipliers' => [$mult],
+                        'error' => 0,
+                        'complexity' => $neededBase
+                    ];
+                } elseif ($neededBase < $reelPayout) {
+                    $actualBase = $reelPayout;
+                    $error = abs($actualBase * $mult - $target);
+                    $candidates[] = [
+                        'basePayout' => $actualBase,
+                        'multiplier' => $mult,
+                        'chestReel' => $reel,
+                        'chestReels' => [$reel],
+                        'chestMultipliers' => [$mult],
+                        'error' => $error,
+                        'complexity' => $actualBase
+                    ];
+                }
+            }
+        }
+
+        // === ВАРИАНТ 3: Несколько сундуков (2 сундука) ===
+        // Комбинации: 2+2=4, 2+3=6, 2+5=10, 3+3=9, 2+2+2=8 и т.д.
+        $multiChestCombos = [
+            [2, 2],      // x4
+            [2, 3],      // x6
+            [3, 3],      // x9
+            [2, 5],      // x10
+            [2, 2, 2],   // x8
+            [2, 2, 3],   // x12
+        ];
+
+        foreach ($multiChestCombos as $combo) {
+            $totalMult = array_product($combo);
+            $neededBase = $target / $totalMult;
+            $numChests = count($combo);
+
+            // Минимальный payout = сумма N самых дешёвых рядов
+            $sortedPayouts = $reelPayouts;
+            asort($sortedPayouts);
+            $cheapestReels = array_slice(array_keys($sortedPayouts), 0, $numChests);
+            $minBase = array_sum(array_slice(array_values($sortedPayouts), 0, $numChests));
+
+            if ($neededBase >= $minBase && $neededBase <= $maxPayoutWithAllChests) {
+                $candidates[] = [
+                    'basePayout' => $neededBase,
+                    'multiplier' => $totalMult,
+                    'chestReel' => $cheapestReels[0],
+                    'chestReels' => $cheapestReels,
+                    'chestMultipliers' => $combo,
+                    'error' => 0,
+                    'complexity' => $neededBase
+                ];
+            } elseif ($neededBase < $minBase && $neededBase > 0) {
+                $actualBase = $minBase;
+                $error = abs($actualBase * $totalMult - $target);
+                $candidates[] = [
+                    'basePayout' => $actualBase,
+                    'multiplier' => $totalMult,
+                    'chestReel' => $cheapestReels[0],
+                    'chestReels' => $cheapestReels,
+                    'chestMultipliers' => $combo,
+                    'error' => $error,
+                    'complexity' => $actualBase
+                ];
+            }
+        }
+
+        // Если нет кандидатов
+        if (empty($candidates)) {
+            $maxMult = max($multipliers);
+            return [
+                'basePayout' => $maxPayoutWithAllChests,
+                'multiplier' => $maxMult,
+                'chestReel' => 2,
+                'chestReels' => [0, 1, 2, 3, 4],
+                'chestMultipliers' => [$maxMult],
+                'error' => abs($target - $maxPayoutWithAllChests * $maxMult)
+            ];
+        }
+
+        // Сортируем: сначала по ошибке, потом по complexity (меньше блоков = лучше)
+        usort($candidates, function($a, $b) {
+            if ($a['error'] !== $b['error']) {
+                return $a['error'] <=> $b['error'];
+            }
+            return $a['complexity'] <=> $b['complexity'];
+        });
+
+        return $candidates[0];
+    }
+
+    /**
+     * Умная генерация бонусного раунда под заданный множитель
+     * @param float $targetMultiplier - целевой множитель выигрыша
+     * @return array - полный state бонусного раунда
+     */
+    public function generateSmartBonus(float $targetMultiplier): array
+    {
+        ray("=== ГЕНЕРАЦИЯ УМНОГО БОНУСА ===", "Целевой множитель: $targetMultiplier");
+
+        // Генерируем стандартную карту блоков
+        $blocks = $this->generateStandardBlockMap();
+        $originalBlocks = $blocks;
+        ray("Карта блоков: $blocks");
+
+        // Состояние HP блоков
+        $hpState = [];
+        $blocksArray = str_split($blocks);
+        foreach ($blocksArray as $idx => $block) {
+            $hpState[$idx] = $this->blockHP[$block] ?? 1;
+        }
+
+        // === УМНАЯ СТРАТЕГИЯ С МНОЖИТЕЛЯМИ СУНДУКОВ ===
+        // Сундук даёт МНОЖИТЕЛЬ к базовому payout!
+        // Пример: base=30, множитель x6 → итого 180
+
+        // Доступные множители сундуков
+        $availableMultipliers = [1, 2, 3, 5, 6, 10];
+
+        // Payout за полный ряд (открытие сундука)
+        $reelPayouts = [
+            0 => 9.1,   // mithril ряд
+            1 => 29.1,  // obsidian ряд
+            2 => 31.1,  // obsidian ряд
+            3 => 29.1,  // obsidian ряд
+            4 => 31.1   // obsidian ряд
+        ];
+
+        // Находим оптимальную комбинацию: базовый payout + множитель сундука
+        $bestPlan = $this->findOptimalChestPlan($targetMultiplier, $reelPayouts, $availableMultipliers);
+
+        ray("=== ПЛАН ГЕНЕРАЦИИ ===", [
+            'target' => $targetMultiplier,
+            'basePayout' => $bestPlan['basePayout'],
+            'chestMultiplier' => $bestPlan['multiplier'],
+            'chestReel' => $bestPlan['chestReel'],
+            'result' => $bestPlan['basePayout'] * $bestPlan['multiplier']
+        ]);
+
+        $chestsToOpen = $bestPlan['chestReels'] ?? ($bestPlan['chestReel'] !== null ? [$bestPlan['chestReel']] : []);
+        $targetBasePayout = $bestPlan['basePayout'];
+        $chestMultiplier = $bestPlan['multiplier'];
+
+        // Генерируем boards динамически
+        $boards = [];
+        $currentPayout = 0.0;
+
+        // Распределяем БАЗОВЫЙ payout по 5 раундам
+        $payoutPerRound = $targetBasePayout / 5;
+
+        for ($round = 0; $round < 5; $round++) {
+            $board = str_repeat('x', 15);
+
+            // Целевой базовый payout к концу этого раунда
+            $targetPayoutThisRound = $payoutPerRound * ($round + 1);
+            // Сколько нужно добрать в этом раунде
+            $payoutNeededThisRound = max(0, $targetPayoutThisRound - $currentPayout);
+
+            // Проверяем достигнут ли БАЗОВЫЙ target НА НАЧАЛО раунда
+            $targetReachedAtStart = ($currentPayout >= $targetBasePayout);
+            $minReelsToProcess = 1; // Гарантируем минимум 1 ряд в каждом раунде
+
+            ray("Round $round: currentPayout=$currentPayout, targetBase=$targetBasePayout, needed=$payoutNeededThisRound");
+
+            // Для первого раунда добавляем бонусные символы
+            if ($round === 0) {
+                $bonusPositions = [1, 5, 11];
+                foreach ($bonusPositions as $pos) {
+                    $board[$pos] = 's';
+                }
+            }
+
+            // Отслеживаем payout набранный в этом раунде
+            $roundPayout = 0.0;
+            $reelsProcessed = 0;
+
+            // Порядок рядов: сундучные ряды первыми, остальные потом
+            // Это обеспечивает приоритет сундуков
+            $reelOrder = [];
+            foreach ($chestsToOpen as $chest) {
+                $reelOrder[] = $chest;
+            }
+            foreach ([0, 1, 2, 3, 4] as $r) {
+                if (!in_array($r, $reelOrder)) {
+                    $reelOrder[] = $r;
+                }
+            }
+            // Не рандомизируем - сундучные ряды первыми, потом остальные по порядку
+            // Это обеспечивает стабильный и предсказуемый результат
+
+            // Если target уже достигнут - добавляем визуальную активность в РАЗНЫЕ ряды
+            if ($currentPayout >= $targetBasePayout * 0.85) {
+                // Находим ряды с несломанными блоками
+                $activeReels = [];
+                for ($r = 0; $r < 5; $r++) {
+                    for ($d = 0; $d < 6; $d++) {
+                        $idx = $r * 6 + $d;
+                        if ($hpState[$idx] > 0) {
+                            $activeReels[] = $r;
+                            break;
+                        }
+                    }
+                }
+
+                if (!empty($activeReels)) {
+                    // Распределяем 2-3 кирки по РАЗНЫМ рядам
+                    $pickaxesToPlace = min(3, count($activeReels));
+                    for ($i = 0; $i < $pickaxesToPlace; $i++) {
+                        // Выбираем ряд циклически (по номеру раунда + смещение)
+                        $reelIdx = ($round + $i) % count($activeReels);
+                        $targetReel = $activeReels[$reelIdx];
+                        $boardStart = $targetReel * 3;
+
+                        // Добавляем 1 кирку в этот ряд
+                        for ($col = 0; $col < 3; $col++) {
+                            if ($board[$boardStart + $col] === 'x') {
+                                $board[$boardStart + $col] = '5';
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                $boards[] = $board;
+                ray("SIM Round $round (target reached): board=$board");
+                continue; // Переходим к следующему раунду
+            }
+
+            // Для каждого ряда генерируем кирки
+            foreach ($reelOrder as $reel) {
+
+                // Проверяем достигли ли мы цели раунда
+                if ($reelsProcessed >= $minReelsToProcess && $roundPayout >= $payoutNeededThisRound) {
+                    break;
+                }
+
+                // Находим первый блок с HP > 0
+                $startDepth = -1;
+                for ($d = 0; $d < 6; $d++) {
+                    $idx = $reel * 6 + $d;
+                    if ($hpState[$idx] > 0) {
+                        $startDepth = $d;
+                        break;
+                    }
+                }
+
+                if ($startDepth < 0) {
+                    continue; // Ряд сломан
+                }
+
+                // Проверяем запланирован ли сундук для этого ряда
+                $reelHasPlannedChest = in_array($reel, $chestsToOpen);
+
+                // Если мы уже у последнего блока (startDepth=5) - это сундук
+                if ($startDepth == 5) {
+                    // Открываем только если этот ряд запланирован
+                    if (!$reelHasPlannedChest) {
+                        ray("Пропускаем сундук ряда $reel (не запланирован)");
+                        continue;
+                    }
+                }
+
+                // Сколько слотов доступно для кирок (не занятых 's')
+                $boardStart = $reel * 3;
+                $availablePositions = [];
+                for ($col = 0; $col < 3; $col++) {
+                    if ($board[$boardStart + $col] === 'x') {
+                        $availablePositions[] = $col;
+                    }
+                }
+
+                if (empty($availablePositions)) {
+                    continue;
+                }
+
+                // Сколько ещё нужно payout в этом раунде?
+                $payoutStillNeeded = max(1, $payoutNeededThisRound - $roundPayout);
+
+                // Если это первый ряд раунда - ОБЯЗАТЕЛЬНО добавляем кирки
+                $forceMinDamage = ($reelsProcessed == 0);
+
+                // Если target был достигнут - всё равно ломаем блоки (игра должна быть интересной)
+                // Но ограничиваем до 1 блока за раунд
+                $limitToOneBlock = $targetReachedAtStart;
+
+                // Считаем сколько HP нужно сломать чтобы получить нужный payout
+                $hpToBreak = 0;
+                $expectedPayout = 0;
+                $remainingToTarget = max(0, $targetBasePayout - $currentPayout);
+
+                // Определяем максимальную глубину для этого ряда
+                // Открываем сундук (depth=5) ТОЛЬКО если этот ряд в списке запланированных сундуков
+                $canOpenChest = in_array($reel, $chestsToOpen);
+                $maxDepth = $canOpenChest ? 6 : 5; // 6 = включая depth=5, 5 = до depth=4
+
+                for ($d = $startDepth; $d < $maxDepth; $d++) {
+                    $idx = $reel * 6 + $d;
+                    $blockPayout = $this->blockPayout[$blocksArray[$idx]] ?? 0;
+
+                    // Текущий projected total ПЕРЕД добавлением этого блока
+                    $currentProjected = $currentPayout + $roundPayout + $expectedPayout;
+                    // Projected total ПОСЛЕ добавления этого блока
+                    $projectedAfter = $currentProjected + $blockPayout;
+
+                    // Если это сундучный ряд - ломаем до конца несмотря ни на что
+                    if ($canOpenChest) {
+                        $hpToBreak += $hpState[$idx];
+                        $expectedPayout += $blockPayout;
+                        continue;
+                    }
+
+                    // Если уже достигли target (даже без этого блока) - не ломаем больше
+                    // Допускаем небольшой недобор (95%) чтобы достичь target
+                    // Прерываем если это НЕ первый блок этого ряда ИЛИ уже обработали ряды в этом раунде
+                    $alreadyHasProgress = ($hpToBreak > 0 || $reelsProcessed > 0);
+                    if ($currentProjected >= $targetBasePayout * 0.95 && $alreadyHasProgress) {
+                        break;
+                    }
+
+                    // Если этот блок сильно превысит target - не ломаем
+                    if ($projectedAfter > $targetBasePayout * 1.05 && $hpToBreak > 0) {
+                        break;
+                    }
+
+                    // Если достигли цели раунда - достаточно
+                    if ($expectedPayout >= $payoutStillNeeded) {
+                        break;
+                    }
+
+                    $hpToBreak += $hpState[$idx];
+                    $expectedPayout += $blockPayout;
+
+                    // Если target уже достигнут на начало раунда, ломаем только 1 блок
+                    if ($targetReachedAtStart) {
+                        break;
+                    }
+                }
+
+                // Если форсируем минимум - добавляем хотя бы 1 блок
+                if ($forceMinDamage && $hpToBreak == 0) {
+                    $idx = $reel * 6 + $startDepth;
+                    $hpToBreak = $hpState[$idx];
+                }
+
+                // Максимальный урон = количество слотов * 5 (алмазная кирка)
+                $maxDamageThisReel = count($availablePositions) * 5;
+
+                // Сколько урона нанести (ограничено слотами и необходимостью)
+                $damageThisRound = min($hpToBreak, $maxDamageThisReel);
+
+                // Если target уже достигнут - ломаем только 1 блок для прогресса
+                if ($limitToOneBlock) {
+                    // Находим HP первого несломанного блока
+                    $firstBlockHP = $hpState[$reel * 6 + $startDepth] ?? 1;
+                    $damageThisRound = $firstBlockHP; // Ровно на 1 блок
+                }
+
+                // Минимум 1 урон если форсируем
+                if ($forceMinDamage && $damageThisRound == 0) {
+                    $damageThisRound = 1;
+                }
+
+                // Подбираем кирки (ограничено количеством слотов)
+                $pickaxes = $this->selectPickaxesForDamage($damageThisRound);
+                while (count($pickaxes) > count($availablePositions)) {
+                    array_pop($pickaxes);
+                }
+
+                shuffle($availablePositions);
+
+                foreach ($pickaxes as $i => $pickaxe) {
+                    if (isset($availablePositions[$i])) {
+                        $board[$boardStart + $availablePositions[$i]] = $pickaxe;
+                    }
+                }
+
+                // Симулируем урон для обновления hpState
+                $pickaxeDamage = ['2' => 5, '3' => 3, '4' => 2, '5' => 1];
+                $totalDamage = 0;
+                foreach ($pickaxes as $p) {
+                    $totalDamage += $pickaxeDamage[$p] ?? 0;
+                }
+
+                for ($d = $startDepth; $d < 6 && $totalDamage > 0; $d++) {
+                    $idx = $reel * 6 + $d;
+                    if ($hpState[$idx] > 0) {
+                        $dmg = min($hpState[$idx], $totalDamage);
+                        $hpState[$idx] -= $dmg;
+                        $totalDamage -= $dmg;
+
+                        if ($hpState[$idx] <= 0) {
+                            $block = $blocksArray[$idx];
+                            $payout = $this->blockPayout[$block] ?? 0;
+                            $currentPayout += $payout;
+                            $roundPayout += $payout;
+                        }
+                    }
+                }
+
+                $reelsProcessed++;
+            }
+
+            ray("Round $round finished: roundPayout=$roundPayout, totalPayout=$currentPayout, reelsProcessed=$reelsProcessed");
+
+            $boards[] = $board;
+            ray("SIM Round $round: board=$board, basePayout=$currentPayout / $targetBasePayout");
+        }
+
+        ray("Сгенерировано boards: " . count($boards), "Итоговый payout: $currentPayout");
+
+        // Собираем state
+        $state = [];
+        $state[] = [
+            'index' => 0,
+            's' => $this->generateSeed(),
+            'type' => 's',
+        ];
+
+        $state[] = [
+            'anticipation' => 3,
+            'blocks' => $originalBlocks,
+            'board' => $boards[0],
+            'index' => 1,
+            'type' => 'reveal',
+        ];
+
+        // Позиции бонусных символов
+        $bonusPositions = [];
+        $boardChars = str_split($boards[0]);
+        foreach ($boardChars as $idx => $char) {
+            if ($char === 's') {
+                $reel = intdiv($idx, 3);
+                $col = $idx % 3;
+                $bonusPositions[] = [$reel, $col];
+            }
+        }
+
+        $state[] = [
+            'bonusType' => 'Bonus',
+            'freeSpinCount' => 5,
+            'index' => 2,
+            'positions' => $bonusPositions,
+            'type' => 'bonusEnter',
+        ];
+
+        // Сброс состояния для реального выполнения
+        $blocks = $originalBlocks;
+        $hpStateReal = [];
+        $totalWin = 0.0;
+        $currentIndex = 3;
+
+        // Генерируем 5 раундов бонуса
+        for ($roundNum = 0; $roundNum < 5; $roundNum++) {
+            $round = $this->generateBonusRound($blocks, $boards[$roundNum], $currentIndex, $hpStateReal, $totalWin);
+            $blocks = $round['newBlocks'];
+            unset($round['newBlocks']);
+
+            foreach ($round as $item) {
+                $state[] = $item;
+            }
+            $currentIndex += 2;
+
+            // Добавляем bonusReveal для следующего раунда (кроме последнего)
+            if ($roundNum < 4) {
+                $state[] = [
+                    'anticipation' => 0,
+                    'board' => $boards[$roundNum + 1],
+                    'freeSpinsRemaining' => 4 - $roundNum,
+                    'index' => $currentIndex,
+                    'type' => 'bonusReveal',
+                ];
+                $currentIndex++;
+            }
+        }
+
+        // Применяем множители сундуков
+        $multipliers = $bestPlan['chestMultipliers'] ?? [];
+        if (empty($multipliers) && $chestMultiplier > 1) {
+            $multipliers = [$chestMultiplier];
+        }
+
+        $finalWin = $totalWin * $chestMultiplier;
+
+        ray("FinalWin: baseWin=$totalWin, chestMultiplier=$chestMultiplier, finalWin=$finalWin");
+
+        $state[] = [
+            'baseWinAmount' => $totalWin,
+            'finalWin' => $finalWin,
+            'index' => $currentIndex,
+            'multipliers' => $multipliers,
+            'type' => 'finalWin',
+        ];
+        $currentIndex++;
+
+        $state[] = [
+            'index' => $currentIndex,
+            'totalSpins' => 5,
+            'totalWin' => $finalWin,
+            'type' => 'bonusExit',
+        ];
+
+        return $state;
+    }
+
+    /**
+     * Генерирует стандартную карту блоков
+     * Структура: первые 2 блока - земля, потом камень, руда, золото/алмаз, обсидиан
+     */
+    private function generateStandardBlockMap(): string
+    {
+        $blocks = '';
+        $patterns = [
+            'ddcrgm', // ряд 0
+            'ddcrgo', // ряд 1
+            'ddcrmo', // ряд 2
+            'ddcrgo', // ряд 3
+            'ddcrmo', // ряд 4
+        ];
+
+        foreach ($patterns as $pattern) {
+            $blocks .= $pattern;
+        }
+
+        return $blocks;
+    }
+
+    /**
+     * Планирует разрушение блоков для достижения целевого множителя
+     * @param string $blocks - карта блоков
+     * @param float $targetMultiplier - целевой множитель
+     * @return array - план разрушения [раунд => [индексы блоков для разрушения]]
+     */
+    /**
+     * Планирует разрушение блоков для достижения целевого множителя
+     * Упрощенная версия: без сундуков, просто ломаем блоки до достижения цели
+     * Учитывает лимит урона 15/раунд на ряд
+     *
+     * @return array ['plan' => [...], 'chests' => [...], 'basePayout' => float, 'finalPayout' => float]
+     */
+    private function planDestruction(string $blocks, float $targetMultiplier): array
+    {
+        $blocksArray = str_split($blocks);
+
+        // Информация о блоках
+        $blockInfo = [];
+        foreach ($blocksArray as $idx => $block) {
+            $blockInfo[$idx] = [
+                'block' => $block,
+                'payout' => $this->blockPayout[$block] ?? 0,
+                'hp' => $this->blockHP[$block] ?? 1,
+                'reel' => intdiv($idx, 6),
+                'depth' => $idx % 6,
+            ];
+        }
+
+        // Максимальный урон за раунд (3 кирки * 5)
+        $maxDamagePerRound = 15;
+
+        // Состояние HP блоков
+        $hpState = [];
+        foreach ($blockInfo as $idx => $info) {
+            $hpState[$idx] = $info['hp'];
+        }
+
+        $plan = [[], [], [], [], []]; // 5 раундов
+        $currentPayout = 0.0;
+        $targetPayout = $targetMultiplier;
+
+        ray("=== ПЛАНИРОВАНИЕ ===", "Target: $targetPayout", "Max damage/round: $maxDamagePerRound");
+
+        // Для каждого раунда выбираем какие блоки ломать
+        for ($round = 0; $round < 5 && $currentPayout < $targetPayout; $round++) {
+            ray("--- Раунд $round ---", "currentPayout: $currentPayout / $targetPayout");
+
+            // Для каждого ряда считаем сколько можем сломать за этот раунд
+            for ($reel = 0; $reel < 5; $reel++) {
+                if ($currentPayout >= $targetPayout) {
+                    break;
+                }
+
+                // Находим первый несломанный блок
+                $startDepth = -1;
+                for ($d = 0; $d < 6; $d++) {
+                    $idx = $reel * 6 + $d;
+                    if ($hpState[$idx] > 0) {
+                        $startDepth = $d;
+                        break;
+                    }
+                }
+
+                if ($startDepth < 0) {
+                    continue; // Ряд полностью сломан
+                }
+
+                // Симулируем нанесение урона этому ряду
+                $damageRemaining = $maxDamagePerRound;
+                $brokenThisRound = [];
+                $payoutThisRound = 0;
+
+                for ($d = $startDepth; $d < 6 && $damageRemaining > 0; $d++) {
+                    $idx = $reel * 6 + $d;
+                    if ($hpState[$idx] > 0) {
+                        $dmg = min($hpState[$idx], $damageRemaining);
+                        $hpState[$idx] -= $dmg;
+                        $damageRemaining -= $dmg;
+
+                        if ($hpState[$idx] <= 0) {
+                            $brokenThisRound[] = $idx;
+                            $payoutThisRound += $blockInfo[$idx]['payout'];
+                        }
+                    }
+                }
+
+                // Добавляем сломанные блоки в план
+                foreach ($brokenThisRound as $idx) {
+                    $plan[$round][] = $idx;
+                }
+                $currentPayout += $payoutThisRound;
+
+                ray("Reel $reel: broken=" . implode(',', $brokenThisRound) . ", payout=+$payoutThisRound, total=$currentPayout");
+            }
+        }
+
+        ray("=== ПЛАН ГОТОВ ===", "План:", $plan, "Итоговый payout: $currentPayout");
+
+        return [
+            'plan' => $plan,
+            'chests' => [],
+            'basePayout' => $currentPayout,
+            'finalPayout' => $currentPayout,
+        ];
+    }
+
+    /**
+     * Генерирует доски (кирки) для каждого раунда на основе плана разрушения
+     * @param string $blocks - карта блоков
+     * @param array $plan - план разрушения
+     * @return array - массив из 5 досок
+     */
+    private function generateBoardsFromPlan(string $blocks, array $plan): array
+    {
+        $boards = [];
+        $blocksArray = str_split($blocks);
+        $hpState = []; // Текущее HP блоков (остаточное)
+        $brokenBlocks = []; // Уже сломанные блоки
+
+        // Инициализируем HP
+        foreach ($blocksArray as $idx => $block) {
+            $hpState[$idx] = $this->blockHP[$block] ?? 1;
+        }
+
+        ray("=== Генерация досок ===", "Blocks: $blocks");
+
+        for ($roundNum = 0; $roundNum < 5; $roundNum++) {
+            $targetBlocks = $plan[$roundNum] ?? [];
+            $board = str_repeat('x', 15);
+
+            ray("--- Раунд $roundNum ---", "Целевые блоки:", $targetBlocks);
+
+            // Для первого раунда добавляем 3 бонусных символа
+            if ($roundNum === 0) {
+                $bonusPositions = [1, 5, 11];
+                foreach ($bonusPositions as $pos) {
+                    $board[$pos] = 's';
+                }
+            }
+
+            // Группируем целевые блоки по рядам
+            $reelTargets = [];
+            foreach ($targetBlocks as $blockIdx) {
+                $reel = intdiv($blockIdx, 6);
+                $depth = $blockIdx % 6;
+                if (!isset($reelTargets[$reel])) {
+                    $reelTargets[$reel] = ['maxDepth' => $depth, 'blocks' => [$blockIdx]];
+                } else {
+                    $reelTargets[$reel]['maxDepth'] = max($reelTargets[$reel]['maxDepth'], $depth);
+                    $reelTargets[$reel]['blocks'][] = $blockIdx;
+                }
+            }
+
+            // Для каждого ряда генерируем кирки
+            foreach ($reelTargets as $reel => $info) {
+                $maxTargetDepth = $info['maxDepth'];
+
+                // Находим первый блок с HP > 0
+                $startDepth = 0;
+                for ($d = 0; $d < 6; $d++) {
+                    $idx = $reel * 6 + $d;
+                    if ($hpState[$idx] > 0) {
+                        $startDepth = $d;
+                        break;
+                    }
+                }
+
+                // Считаем HP блоков от startDepth до maxTargetDepth (остаточный HP)
+                $neededDamage = 0;
+                for ($d = $startDepth; $d <= $maxTargetDepth; $d++) {
+                    $idx = $reel * 6 + $d;
+                    $neededDamage += $hpState[$idx];
+                }
+
+                // Подбираем кирки (макс 15 урона)
+                $pickaxes = $this->selectPickaxesForDamage($neededDamage);
+
+                ray("Reel $reel: startDepth=$startDepth, maxDepth=$maxTargetDepth, neededDamage=$neededDamage, pickaxes=", $pickaxes);
+
+                // Размещаем кирки РАНДОМНО
+                $boardStart = $reel * 3;
+                $availablePositions = [];
+                for ($col = 0; $col < 3; $col++) {
+                    if ($board[$boardStart + $col] === 'x') {
+                        $availablePositions[] = $col;
+                    }
+                }
+                shuffle($availablePositions);
+
+                foreach ($pickaxes as $pickaxeIdx => $pickaxe) {
+                    if (isset($availablePositions[$pickaxeIdx])) {
+                        $col = $availablePositions[$pickaxeIdx];
+                        $board[$boardStart + $col] = $pickaxe;
+                    }
+                }
+
+                // Симулируем урон (обновляем hpState)
+                $pickaxeDamage = ['2' => 5, '3' => 3, '4' => 2, '5' => 1];
+                $totalDamage = 0;
+                foreach ($pickaxes as $p) {
+                    $totalDamage += $pickaxeDamage[$p] ?? 0;
+                }
+
+                for ($d = $startDepth; $d <= 5 && $totalDamage > 0; $d++) {
+                    $idx = $reel * 6 + $d;
+                    if ($hpState[$idx] > 0) {
+                        $dmg = min($hpState[$idx], $totalDamage);
+                        $hpState[$idx] -= $dmg;
+                        $totalDamage -= $dmg;
+                        if ($hpState[$idx] <= 0) {
+                            $brokenBlocks[] = $idx;
+                        }
+                    }
+                }
+            }
+
+            ray("Board раунда $roundNum: $board");
+            $boards[] = $board;
+        }
+
+        ray("=== Все доски ===", $boards);
+
+        return $boards;
+    }
+
+    /**
+     * Подбирает оптимальные кирки для заданного урона
+     * @param int $damage - необходимый урон
+     * @return array - массив символов кирок
+     */
+    private function selectPickaxesForDamage(int $damage): array
+    {
+        if ($damage <= 0) {
+            return [];
+        }
+
+        $pickaxes = [];
+        $remaining = $damage;
+
+        // Приоритет кирок: от слабых к сильным (чтобы не переломать лишнего)
+        // 5=1, 4=2, 3=3, 2=5
+        $pickaxeTypes = [
+            '2' => 5,
+            '3' => 3,
+            '4' => 2,
+            '5' => 1,
+        ];
+
+        // Сначала пробуем подобрать точно
+        // Используем жадный алгоритм от больших к меньшим
+        foreach ($pickaxeTypes as $symbol => $dmg) {
+            while ($remaining >= $dmg && count($pickaxes) < 3) {
+                $pickaxes[] = $symbol;
+                $remaining -= $dmg;
+            }
+        }
+
+        // Если не хватило кирок, добавляем самые слабые
+        while ($remaining > 0 && count($pickaxes) < 3) {
+            $pickaxes[] = '5';
+            $remaining -= 1;
+        }
+
+        return $pickaxes;
+    }
+
     public function getBonusState(): array
     {
         $blocks = 'dccrmmdccrgoddcrmodccrggdccrgo';
@@ -251,32 +1097,46 @@ class PlayService
         return $state;
 
     }
-    public function getBonusRound(): array
+    public function getBonusRound(?float $targetMultiplier = null): array
     {
-        $array =
-            [
-                'balance' => [
-                    'amount' => 1480000000,
-                    'currency' => 'USD',
-                ],
-                'round' => [
-                    'betID' => 3267508054,
-                    'amount' => 1000000,
-                    'payout' => 2800000,
-                    'payoutMultiplier' => 1.8,
-                    'active' => true,
-                    'state' => $this->getBonusState(),
-                    'mode' => 'BONUS',
-                    'event' => null,
-                ],
-            ];
+        // Если указан целевой множитель, используем умную генерацию
+        if ($targetMultiplier !== null) {
+            $state = $this->generateSmartBonus($targetMultiplier);
+        } else {
+            $state = $this->getBonusState();
+        }
+
+        // Получаем итоговый множитель из state
+        $finalWin = 0;
+        foreach ($state as $item) {
+            if (isset($item['type']) && $item['type'] === 'finalWin') {
+                $finalWin = $item['finalWin'] ?? 0;
+                break;
+            }
+        }
+
+        $array = [
+            'balance' => [
+                'amount' => $this->session->balance,
+                'currency' => 'RUB',
+            ],
+            'round' => [
+                'betID' => $this->generateSeed(),
+                'amount' => $this->bet,
+                'payout' => (int) round($this->bet * $finalWin),
+                'payoutMultiplier' => $finalWin,
+                'active' => true,
+                'state' => $state,
+                'mode' => 'BONUS',
+                'event' => null,
+            ],
+        ];
         return $array;
     }
-    public function playBonus(): array
+
+    public function playBonus(?float $targetMultiplier = null): array
     {
-
-        return $this->getBonusRound();
-
+        return $this->getBonusRound($targetMultiplier);
     }
 
     /**
