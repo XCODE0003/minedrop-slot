@@ -361,20 +361,21 @@ class PlayService
             }
         }
 
-        // Для БОЛЬШИХ множителей (>100) предпочитаем несколько сундуков - это красивее
+        // Для БОЛЬШИХ множителей предпочитаем несколько сундуков с меньшим basePayout
         if ($target > 100) {
-            $multiChestCandidates = array_filter($goodCandidates, fn($c) => ($c['numChests'] ?? 1) >= 2);
-            if (!empty($multiChestCandidates)) {
-                // Предпочитаем 2-3 сундука с множителями 2-5 (не один большой x10)
-                $preferredCandidates = array_filter($multiChestCandidates, function($c) {
-                    $mults = $c['chestMultipliers'] ?? [];
-                    return !empty($mults) && max($mults) <= 5;
-                });
+            // Сортируем по basePayout (меньше = проще достичь)
+            usort($goodCandidates, fn($a, $b) => $a['basePayout'] <=> $b['basePayout']);
 
-                if (!empty($preferredCandidates)) {
-                    $goodCandidates = array_values($preferredCandidates);
-                } else {
+            // Фильтруем - берём только те, где basePayout достижим (<=100)
+            $achievableCandidates = array_filter($goodCandidates, fn($c) => $c['basePayout'] <= 100);
+
+            if (!empty($achievableCandidates)) {
+                // Из достижимых предпочитаем с несколькими сундуками
+                $multiChestCandidates = array_filter($achievableCandidates, fn($c) => ($c['numChests'] ?? 1) >= 2);
+                if (!empty($multiChestCandidates)) {
                     $goodCandidates = array_values($multiChestCandidates);
+                } else {
+                    $goodCandidates = array_values($achievableCandidates);
                 }
             }
         }
