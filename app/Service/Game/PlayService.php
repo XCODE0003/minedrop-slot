@@ -1147,23 +1147,25 @@ class PlayService
                 break;
             }
         }
+        $this->session->balance += $this->bet * $finalWin;
+        $this->session->save();
 
         $array = [
-            'balance' => [
+                'balance' => [
                 'amount' => $this->session->balance,
                 'currency' => 'RUB',
-            ],
-            'round' => [
+                ],
+                'round' => [
                 'betID' => $this->generateSeed(),
                 'amount' => $this->bet,
                 'payout' => (int) round($this->bet * $finalWin),
                 'payoutMultiplier' => $finalWin,
-                'active' => true,
+                    'active' => true,
                 'state' => $state,
-                'mode' => 'BONUS',
-                'event' => null,
-            ],
-        ];
+                    'mode' => 'BONUS',
+                    'event' => null,
+                ],
+            ];
         return $array;
     }
 
@@ -1238,7 +1240,6 @@ class PlayService
         $tntPhase = null;
         $totalWin = 0.0;
 
-        // Если задан множитель, перебираем варианты до получения нужного выигрыша
         if ($this->multiplierSeed !== null) {
             $targetMultiplier = (float) $this->multiplierSeed;
             $maxAttempts = 1000000; // Ограничение попыток
@@ -1269,11 +1270,9 @@ class PlayService
             $totalWin = $this->calculateWin($pickaxePhase, $tntPhase);
         }
 
-        // Проверяем выпала ли бонуска (3+ символа "s" на board)
         $bonusCount = substr_count($board, 's');
         $isBonusTriggered = $bonusCount >= 3;
 
-        // Находим позиции бонусных символов
         $bonusPositions = [];
         if ($isBonusTriggered) {
             $boardRows = str_split($board, 3);
@@ -1287,6 +1286,44 @@ class PlayService
             }
         }
 
+        // Если выпал бонус - генерируем бонусный раунд
+        if ($isBonusTriggered) {
+            // Определяем целевой множитель для бонуса
+            $bonusTargetMultiplier = $this->multiplierSeed !== null 
+                ? (float) $this->multiplierSeed 
+                : $this->generateRandomBonusMultiplier();
+            
+            // Генерируем умный бонусный раунд
+            $bonusState = $this->generateSmartBonus($bonusTargetMultiplier);
+            
+            // Получаем финальный выигрыш из бонуса
+            $bonusFinalWin = 0.0;
+            foreach ($bonusState as $item) {
+                if ($item['type'] === 'finalWin') {
+                    $bonusFinalWin = $item['finalWin'];
+                    break;
+                }
+            }
+            
+            return [
+                'balance' => [
+                    'amount' => $this->session->balance,
+                    'currency' => 'RUB',
+                ],
+                'round' => [
+                    'betID' => $seed,
+                    'amount' => $this->bet,
+                    'payout' => (int) round($this->bet * $bonusFinalWin),
+                    'payoutMultiplier' => $bonusFinalWin,
+                    'active' => true,
+                    'state' => $bonusState,
+                    'mode' => 'BONUS',
+                    'event' => 'TRIGGER_BONUS',
+                ],
+            ];
+        }
+
+        // Обычный раунд (без бонуса)
         $round = [
             'balance' => [
                 'amount' => $this->session->balance,
@@ -1297,7 +1334,7 @@ class PlayService
                 'amount' => $this->bet,
                 'payout' => (int) round($this->bet * $totalWin),
                 'payoutMultiplier' => $totalWin,
-                'active' => $totalWin > 0 || $isBonusTriggered,
+                'active' => $totalWin > 0,
                 'state' => [
                     [
                         'index' => 0,
@@ -1306,7 +1343,7 @@ class PlayService
                     ],
                     [
                         'index' => 1,
-                        'anticipation' => $bonusCount, // Количество бонусных символов
+                        'anticipation' => $bonusCount,
                         'blocks' => $blocks,
                         'board' => $board,
                         'type' => 'reveal',
@@ -1319,7 +1356,7 @@ class PlayService
                     ],
                 ],
                 'mode' => 'BASE',
-                'event' => $isBonusTriggered ? 'TRIGGER_BONUS' : null,
+                'event' => null,
             ],
         ];
 
@@ -1339,20 +1376,36 @@ class PlayService
             'type' => 'finalWin',
         ];
 
-        // Если выпала бонуска - добавляем bonusEnter
-        if ($isBonusTriggered) {
-            $round['round']['state'][] = [
-                'index' => count($round['round']['state']),
-                'bonusType' => 'Bonus',
-                'freeSpinCount' => 5,
-                'positions' => $bonusPositions,
-                'type' => 'bonusEnter',
-            ];
-        }
-
         return $round;
     }
 
+    /**
+     * Генерирует случайный множитель для бонусного раунда
+     * Распределение весов для разных диапазонов множителей
+     */
+    private function generateRandomBonusMultiplier(): float
+    {
+        $rand = mt_rand(1, 1000);
+        
+        // Распределение вероятностей:
+        // 50% - 10-30x (частые, небольшие выигрыши)
+        // 30% - 30-80x (средние выигрыши)
+        // 15% - 80-200x (хорошие выигрыши)
+        // 4% - 200-500x (большие выигрыши)
+        // 1% - 500-1000x (редкие, крупные выигрыши)
+        
+        if ($rand <= 500) {
+            return mt_rand(100, 300) / 10; // 10.0 - 30.0
+        } elseif ($rand <= 800) {
+            return mt_rand(300, 800) / 10; // 30.0 - 80.0
+        } elseif ($rand <= 950) {
+            return mt_rand(800, 2000) / 10; // 80.0 - 200.0
+        } elseif ($rand <= 990) {
+            return mt_rand(2000, 5000) / 10; // 200.0 - 500.0
+        } else {
+            return mt_rand(5000, 10000) / 10; // 500.0 - 1000.0
+        }
+    }
 
     private function calculateWin(array $pickaxePhase, array $tntPhase = []): float
     {
@@ -1653,7 +1706,7 @@ class PlayService
                         if (isset($hpState[$globalIndex])) {
                             $blockHPRemaining[$currentIndex] = $hpState[$globalIndex];
                         } else {
-                            $blockHPRemaining[$currentIndex] = $baseHP;
+                        $blockHPRemaining[$currentIndex] = $baseHP;
                         }
                     }
                     $hp = $blockHPRemaining[$currentIndex];
