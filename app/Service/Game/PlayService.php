@@ -184,6 +184,7 @@ class PlayService
 
             foreach ($reelPayouts as $reel => $reelPayout) {
                 if ($neededBase >= $reelPayout && $neededBase <= $maxPayoutWithAllChests) {
+                    // Идеальное совпадение
                     $candidates[] = [
                         'basePayout' => $neededBase,
                         'multiplier' => $mult,
@@ -194,17 +195,22 @@ class PlayService
                         'complexity' => $neededBase
                     ];
                 } elseif ($neededBase < $reelPayout) {
+                    // Base меньше чем payout ряда - используем минимум ряда
                     $actualBase = $reelPayout;
-                    $error = abs($actualBase * $mult - $target);
-                    $candidates[] = [
-                        'basePayout' => $actualBase,
-                        'multiplier' => $mult,
-                        'chestReel' => $reel,
-                        'chestReels' => [$reel],
-                        'chestMultipliers' => [$mult],
-                        'error' => $error,
-                        'complexity' => $actualBase
-                    ];
+                    $actualResult = $actualBase * $mult;
+                    $error = abs($actualResult - $target);
+                    // Добавляем только если результат не слишком сильно превышает target (до 50%)
+                    if ($actualResult <= $target * 1.5) {
+                        $candidates[] = [
+                            'basePayout' => $actualBase,
+                            'multiplier' => $mult,
+                            'chestReel' => $reel,
+                            'chestReels' => [$reel],
+                            'chestMultipliers' => [$mult],
+                            'error' => $error,
+                            'complexity' => $actualBase
+                        ];
+                    }
                 }
             }
         }
@@ -269,15 +275,38 @@ class PlayService
             ];
         }
 
-        // Сортируем: сначала по ошибке, потом по complexity (меньше блоков = лучше)
-        usort($candidates, function($a, $b) {
-            if ($a['error'] !== $b['error']) {
-                return $a['error'] <=> $b['error'];
-            }
-            return $a['complexity'] <=> $b['complexity'];
-        });
+        // Фильтруем кандидатов с минимальной ошибкой
+        $minError = min(array_column($candidates, 'error'));
+        $bestCandidates = array_filter($candidates, fn($c) => abs($c['error'] - $minError) < 0.1);
+        $bestCandidates = array_values($bestCandidates);
 
-        return $candidates[0];
+        // Находим минимальный basePayout среди лучших
+        $minBase = min(array_column($bestCandidates, 'basePayout'));
+
+        // Оставляем только кандидатов с оптимальным или близким basePayout (допуск 20%)
+        $optimalCandidates = array_filter($bestCandidates, fn($c) => $c['basePayout'] <= $minBase * 1.2);
+        $optimalCandidates = array_values($optimalCandidates);
+
+        // Группируем по рядам для рандомизации
+        $byReel = [];
+        foreach ($optimalCandidates as $c) {
+            $reel = $c['chestReel'];
+            if ($reel !== null && !isset($byReel[$reel])) {
+                $byReel[$reel] = $c;
+            }
+        }
+
+        // Если нет рядов с сундуками, вернём оптимальный кандидат
+        if (empty($byReel)) {
+            shuffle($optimalCandidates);
+            return $optimalCandidates[0];
+        }
+
+        // Выбираем случайный ряд из оптимальных
+        $reelOptions = array_values($byReel);
+        shuffle($reelOptions);
+
+        return $reelOptions[0];
     }
 
     /**
@@ -365,19 +394,20 @@ class PlayService
             $roundPayout = 0.0;
             $reelsProcessed = 0;
 
-            // Порядок рядов: сундучные ряды первыми, остальные потом
-            // Это обеспечивает приоритет сундуков
+            // Порядок рядов: сундучные ряды первыми, остальные в случайном порядке
             $reelOrder = [];
             foreach ($chestsToOpen as $chest) {
                 $reelOrder[] = $chest;
             }
+            // Остальные ряды в случайном порядке
+            $otherReels = [];
             foreach ([0, 1, 2, 3, 4] as $r) {
                 if (!in_array($r, $reelOrder)) {
-                    $reelOrder[] = $r;
+                    $otherReels[] = $r;
                 }
             }
-            // Не рандомизируем - сундучные ряды первыми, потом остальные по порядку
-            // Это обеспечивает стабильный и предсказуемый результат
+            shuffle($otherReels); // Рандомизируем порядок для разнообразия
+            $reelOrder = array_merge($reelOrder, $otherReels);
 
             // Если target уже достигнут - добавляем визуальную активность в РАЗНЫЕ ряды
             if ($currentPayout >= $targetBasePayout * 0.85) {
@@ -394,16 +424,19 @@ class PlayService
                 }
 
                 if (!empty($activeReels)) {
+                    // Перемешиваем ряды для случайного выбора
+                    shuffle($activeReels);
+
                     // Распределяем 2-3 кирки по РАЗНЫМ рядам
                     $pickaxesToPlace = min(3, count($activeReels));
                     for ($i = 0; $i < $pickaxesToPlace; $i++) {
-                        // Выбираем ряд циклически (по номеру раунда + смещение)
-                        $reelIdx = ($round + $i) % count($activeReels);
-                        $targetReel = $activeReels[$reelIdx];
+                        $targetReel = $activeReels[$i];
                         $boardStart = $targetReel * 3;
 
-                        // Добавляем 1 кирку в этот ряд
-                        for ($col = 0; $col < 3; $col++) {
+                        // Добавляем 1 кирку в случайную позицию этого ряда
+                        $cols = [0, 1, 2];
+                        shuffle($cols);
+                        foreach ($cols as $col) {
                             if ($board[$boardStart + $col] === 'x') {
                                 $board[$boardStart + $col] = '5';
                                 break;
