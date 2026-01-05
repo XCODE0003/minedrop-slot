@@ -425,6 +425,7 @@ class PlayService
 
         // Генерируем стандартную карту блоков
         $blocks = $this->generateStandardBlockMap();
+        $blocks = $this->generateBlocks($targetMultiplier);
         $originalBlocks = $blocks;
         ray("Карта блоков: $blocks");
 
@@ -901,7 +902,7 @@ class PlayService
                 $state[] = [
                     'anticipation' => 0,
                     'board' => $boards[$roundNum + 1],
-                    'freeSpinsRemaining' => 4 - $roundNum,
+                    'freeSpinsRemaining' => 3 - $roundNum,
                     'index' => $currentIndex,
                     'type' => 'bonusReveal',
                 ];
