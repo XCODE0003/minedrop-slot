@@ -58,12 +58,9 @@ class PlayService
     }
     public function play(): array
     {
-        $round = $this->getRound();
-        $win = $this->multiplierSeed * $this->bet;
-        $this->session->balance -= $this->bet;
-        $this->session->balance += $win;
-        $this->session->save();
-        return $round;
+        // Баланс уже списан в контроллере
+        // Выигрыш начисляется отдельным запросом после подтверждения результата
+        return $this->getRound();
     }
 
     public function generateBonusRound($blocks, $board, $startIndex = 0, array &$hpState = [], float &$totalWinAccum = 0): array
@@ -1355,6 +1352,7 @@ class PlayService
         }
 
         // Получаем итоговый множитель из state
+        // Выигрыш начисляется отдельным запросом после подтверждения результата
         $finalWin = 0;
         foreach ($state as $item) {
             if (isset($item['type']) && $item['type'] === 'finalWin') {
@@ -1362,8 +1360,6 @@ class PlayService
                 break;
             }
         }
-        $this->session->balance += $this->bet * $finalWin;
-        $this->session->save();
 
         $array = [
                 'balance' => [
@@ -1381,6 +1377,8 @@ class PlayService
                     'event' => null,
                 ],
             ];
+            $this->session->balance += $this->bet * $finalWin;
+            $this->session->save();
         return $array;
     }
 
@@ -1574,7 +1572,8 @@ class PlayService
                 'event' => null,
             ],
         ];
-
+        $this->session->balance += $this->bet * $totalWin;
+        $this->session->save();
         if ($totalWin > 0) {
             $round['round']['state'][] = [
                 'index' => count($round['round']['state']),
