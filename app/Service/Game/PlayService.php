@@ -59,7 +59,10 @@ class PlayService
     public function play(): array
     {
         $round = $this->getRound();
-
+        $win = $this->multiplierSeed * $this->bet;
+        $this->session->balance -= $this->bet;
+        $this->session->balance += $win;
+        $this->session->save();
         return $round;
     }
 

@@ -32,12 +32,10 @@ class WalletController extends Controller
             $sessionGame->save();
             return $playService->playBonus($multiplier);
         }
-
-
-        $win = $multiplier * $amount;
         $sessionGame->balance -= $amount;
-        $sessionGame->balance += $win;
         $sessionGame->save();
+
+
 
         return $playService->play();
     }
