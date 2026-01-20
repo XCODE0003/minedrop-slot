@@ -32,9 +32,16 @@ class WalletController extends Controller
             $sessionGame->save();
             return $playService->playBonus($multiplier);
         }
+        if($mode === 'ANTE') {
+            $sessionGame->balance -= $amount * 3;
+            $sessionGame->save();
+        }
+        else{
+            $sessionGame->balance -= $amount;
+            $sessionGame->save();
+        }
 
-        $sessionGame->balance -= $amount;
-        $sessionGame->save();
+
 
 
 
